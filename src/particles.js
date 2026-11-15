@@ -138,7 +138,61 @@ export class Decals {
 
 // Visual effects: slashes, rings, floating texts, flashes.
 export class Effects {
-  constructor() { this.slashes = []; this.rings = []; this.texts = []; this.bolts = []; this.thrusts = []; }
+  constructor() { this.slashes = []; this.rings = []; this.texts = []; this.bolts = []; this.thrusts = []; this.spirits = []; this.pools = []; }
+  // a shimmering golden pool on the ground (staff: Sacred Pool)
+  pool(x, y, radius, dur) { this.pools.push({ x, y, radius, t: 0, dur }); }
+
+  // staff spirit burst: a soft glowing disc that blooms out, an outer ring, a turning ring of lotus
+  // petals and a faint inner sigil, all on the ground plane
+  // opts.kanji: a glyph in the middle of the seal; opts.dur; opts.pillar: a column of light rises from it
+  spirit(x, y, radius, opts = {}) { this.spirits.push({ x, y, radius, t: 0, dur: opts.dur || 0.7, rot: Math.random() * TAU, kanji: opts.kanji || null, pillar: opts.pillar ?? 1, col: opts.col || null }); }
+  drawSpirits(ctx) {
+    if (!this.spirits.length) return;
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    for (const s of this.spirits) {
+      const k = s.t / s.dur, grow = ease.outCubic(Math.min(1, k * 1.6)), fade = 1 - ease.inQuad(k);
+      const R = s.radius * grow, cx = isoX(s.x, s.y), cy = isoY(s.x, s.y);
+      ctx.save(); ctx.translate(cx, cy); ctx.scale(1, 0.5);
+      const RX = R * 45.25;
+      // a holy seal of warm light: glowing disc, double ring with sutra ticks, an eight-point star, lotus petals, a glyph
+      const C = s.col || '255,236,180';
+      const gr = ctx.createRadialGradient(0, 0, 0, 0, 0, RX);
+      gr.addColorStop(0, `rgba(255,252,236,${0.6 * fade})`); gr.addColorStop(0.5, `rgba(${C},${0.3 * fade})`); gr.addColorStop(1, `rgba(${C},0)`);
+      ctx.fillStyle = gr; ctx.beginPath(); ctx.arc(0, 0, RX, 0, TAU); ctx.fill();
+      ctx.strokeStyle = `rgba(255,246,214,${0.9 * fade})`; ctx.lineWidth = 3.5 * (1 - k * 0.5);
+      ctx.beginPath(); ctx.arc(0, 0, RX, 0, TAU); ctx.stroke();
+      ctx.strokeStyle = `rgba(${C},${0.6 * fade})`; ctx.lineWidth = 1.4;
+      ctx.beginPath(); ctx.arc(0, 0, RX * 0.8, 0, TAU); ctx.stroke();
+      const rot = s.rot + k * 1.6;
+      ctx.beginPath();
+      for (let i = 0; i < 24; i++) { const a = -rot * 0.5 + (i / 24) * TAU, r0 = RX * 0.8, r1 = RX * (i % 3 ? 0.86 : 0.93); ctx.moveTo(Math.cos(a) * r0, Math.sin(a) * r0); ctx.lineTo(Math.cos(a) * r1, Math.sin(a) * r1); }
+      ctx.stroke();
+      ctx.strokeStyle = `rgba(255,240,200,${0.55 * fade})`; ctx.lineWidth = 1.3;
+      for (const off of [0, Math.PI / 4]) { ctx.beginPath(); for (let i = 0; i < 4; i++) { const a = rot * 0.7 + off + (i / 4) * TAU, r = RX * 0.62; i ? ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r) : ctx.moveTo(Math.cos(a) * r, Math.sin(a) * r); } ctx.closePath(); ctx.stroke(); }
+      // turning lotus petals around the rim
+      ctx.fillStyle = `rgba(255,250,232,${0.75 * fade})`;
+      for (let i = 0; i < 8; i++) {
+        const a = rot + (i / 8) * TAU, px = Math.cos(a) * RX * 0.86, py = Math.sin(a) * RX * 0.86;
+        ctx.save(); ctx.translate(px, py); ctx.rotate(a + Math.PI / 2);
+        ctx.beginPath(); ctx.moveTo(0, -RX * 0.13); ctx.quadraticCurveTo(RX * 0.06, 0, 0, RX * 0.13); ctx.quadraticCurveTo(-RX * 0.06, 0, 0, -RX * 0.13); ctx.fill();
+        ctx.restore();
+      }
+      ctx.restore();
+      // the glyph, standing up out of the seal, and a soft column of light
+      const ga = Math.min(1, k * 5) * fade;
+      if (s.pillar) {
+        const ph = 110 * (0.6 + 0.4 * grow) * (R / 2), pw = RX * 0.32;
+        const pg = ctx.createLinearGradient(0, cy - ph, 0, cy);
+        pg.addColorStop(0, `rgba(${C},0)`); pg.addColorStop(1, `rgba(255,250,230,${0.35 * ga})`);
+        ctx.fillStyle = pg; ctx.fillRect(cx - pw / 2, cy - ph, pw, ph);
+      }
+      if (s.kanji) {
+        ctx.font = `800 ${Math.round(RX * 0.5)}px "Shippori Mincho", serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillStyle = `rgba(255,248,224,${0.85 * ga})`; ctx.fillText(s.kanji, cx, cy - RX * 0.18 - k * 10);
+      }
+    }
+    ctx.restore();
+  }
 
   // jagged lightning arc between two world points (z = height)
   bolt(x1, y1, z1, x2, y2, z2) {
@@ -179,12 +233,23 @@ export class Effects {
   }
 
   update(dt) {
-    for (const arr of [this.slashes, this.rings, this.texts, this.bolts, this.thrusts]) {
+    for (const arr of [this.slashes, this.rings, this.texts, this.bolts, this.thrusts, this.spirits, this.pools]) {
       for (let i = arr.length - 1; i >= 0; i--) { arr[i].t += dt; if (arr[i].t >= arr[i].dur) arr.splice(i, 1); }
     }
   }
 
   drawGround(ctx) {
+    for (const P of this.pools) {
+      const k = P.t / P.dur, a = Math.min(1, P.t * 4) * Math.min(1, (P.dur - P.t) * 2), RX = P.radius * 45.25;
+      ctx.save(); ctx.translate(isoX(P.x, P.y), isoY(P.x, P.y)); ctx.scale(1, 0.5); ctx.globalCompositeOperation = 'lighter';
+      const gr = ctx.createRadialGradient(0, 0, 0, 0, 0, RX);
+      gr.addColorStop(0, `rgba(255,236,170,${0.3 * a})`); gr.addColorStop(0.8, `rgba(255,210,120,${0.18 * a})`); gr.addColorStop(1, 'rgba(255,210,120,0)');
+      ctx.fillStyle = gr; ctx.beginPath(); ctx.arc(0, 0, RX, 0, TAU); ctx.fill();
+      ctx.strokeStyle = `rgba(255,240,200,${0.5 * a})`; ctx.lineWidth = 2;
+      for (let i = 0; i < 2; i++) { const r = RX * (((P.t * 0.6 + i * 0.5) % 1)); ctx.beginPath(); ctx.arc(0, 0, r, 0, TAU); ctx.stroke(); }
+      ctx.restore();
+    }
+    this.drawSpirits(ctx);
     for (const r of this.rings) {
       const k = r.t / r.dur;
       const rad = r.radius * ease.outCubic(k);

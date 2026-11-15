@@ -6,8 +6,17 @@ import { input } from './input.js';
 import { sfx } from './audio.js';
 import { Dialogue } from './dialogue.js';
 import { storyLines, GENSAI_PAL, KAGERO_PAL } from './story.js';
+import { RIG_WEAPON } from './player.js';
+import { Motes, fog, lightShafts, vignette, glow, hangingLantern, nobori, stoneLantern, figure, crow, flyingBird, bat, cat, flitter, lightning, hsh } from './cutfx.js';
 
-const PALS = [
+// a player's chosen weapons on their cutscene figure: the first in hand, the second stowed on the back
+export function weaponRig(p) {
+  if (!p || !p.weapons) return {};
+  const a = RIG_WEAPON[p.weapons[0].key], b = p.weapons[1] && RIG_WEAPON[p.weapons[1].key];
+  return { weapon: a.weapon, weapon2: a.weapon2, grip: a.grip, backWeapon: b ? b.back : null };
+}
+
+export const PALS = [
   { skin: '#f1c9a5', cloth: '#2c3a5e', cloth2: '#1d2742', sash: '#c0392b', hood: '#232c46', scarf: '#d63a3a', metal: '#e6edf5', wood: '#7a4e2a', accent: '#c0392b' },
   { skin: '#f1c9a5', cloth: '#e6e2d6', cloth2: '#3a4a5e', sash: '#2a7ac0', hood: '#d8d2c2', scarf: '#3a9ae0', metal: '#e6edf5', wood: '#7a4e2a', accent: '#2a7ac0' },
 ];
@@ -16,11 +25,13 @@ const TITLE_DUR = 3.2;
 export class IntroCutscene {
   // opts.remote: the online joiner mirrors the host (lines advance on the host's word)
   constructor(g, onDone, opts = {}) {
-    this.g = g; this.onDone = onDone; this.t = 0;
+    this.id = 'intro'; this.g = g; this.onDone = onDone; this.t = 0;
     this.coop = g.players.length > 1;
     this.scene = 'court'; this.fade = 1; this.fadeTo = 0; this.pendingScene = null;
     this.titleT = -1; this.done = false;
-    this.rain = Array.from({ length: 160 }, () => ({ x: Math.random(), y: Math.random(), s: rand(0.7, 1.3) }));
+    this.rain = Array.from({ length: 220 }, () => ({ x: Math.random(), y: Math.random(), s: rand(0.7, 1.3) }));
+    this.splash = []; // rain hitting the courtyard stones
+    this.fx = { embers: new Motes(36, 'ember', [0, 0, 1, 1], { sources: [[0.58, 0.55], [0.95, 0.55]] }), ash: new Motes(30, 'ash', [0, 0.08, 1, 0.7]) };
     this.buildCourt();
     this.dlg = new Dialogue(g, { remote: opts.remote });
     const lines = storyLines('intro', this.coop);
@@ -39,8 +50,8 @@ export class IntroCutscene {
     A.push(this.actor({ id: 'g2', x: 0.85, y: -0.07, facing: Math.PI, rig: { pal: KAGERO_PAL, head: 'jingasa', weapon: 'spear', grip: 'pole' } }));
     A.push(this.guardL = this.actor({ id: 'g3', x: 0.12, y: 0.02, facing: 0, rig: { pal: KAGERO_PAL, head: 'jingasa', weapon: 'spear', grip: 'pole' } }));
     A.push(this.guardR = this.actor({ id: 'g4', x: 0.2, y: 0.03, facing: 0, rig: { pal: KAGERO_PAL, head: 'jingasa', weapon: 'spear', grip: 'pole' } }));
-    A.push(this.kage = this.actor({ id: 'kage', x: 0.4, y: 0.04, facing: 0, rig: { pal: PALS[0], head: 'hood', scarf: true }, pose: { kind: 'kneel', t: 0 } }));
-    if (this.coop) A.push(this.kaze = this.actor({ id: 'kaze', x: 0.31, y: 0.05, facing: 0, rig: { pal: PALS[1], head: 'hood', scarf: true }, pose: { kind: 'kneel', t: 0 } }));
+    A.push(this.kage = this.actor({ id: 'kage', x: 0.4, y: 0.04, facing: 0, rig: { pal: PALS[0], head: 'hood', scarf: true, ...weaponRig(this.g.players[0]) }, pose: { kind: 'kneel', t: 0 } }));
+    if (this.coop) A.push(this.kaze = this.actor({ id: 'kaze', x: 0.31, y: 0.05, facing: 0, rig: { pal: PALS[1], head: 'hood', scarf: true, ...weaponRig(this.g.players[1]) }, pose: { kind: 'kneel', t: 0 } }));
     this.actors = A;
   }
 
@@ -49,8 +60,8 @@ export class IntroCutscene {
     A.push(this.captain = this.actor({ id: 'captain', x: 0.62, y: 0.02, facing: Math.PI, rig: { pal: KAGERO_PAL, head: 'kabuto', armor: true, weapon: 'naginata', grip: 'pole' }, s: 2.45 }));
     A.push(this.actor({ id: 's1', x: 0.72, y: -0.01, facing: Math.PI, rig: { pal: KAGERO_PAL, head: 'jingasa', weapon: 'spear', grip: 'pole' } }));
     A.push(this.actor({ id: 's2', x: 0.79, y: 0.03, facing: Math.PI, rig: { pal: KAGERO_PAL, head: 'jingasa', weapon: 'spear', grip: 'pole' } }));
-    A.push(this.kage = this.actor({ id: 'kage', x: 0.44, y: 0.05, facing: 0, rig: { pal: PALS[0], head: 'hood', scarf: true }, pose: { kind: 'kneel', t: 0.6 } }));
-    if (this.coop) A.push(this.kaze = this.actor({ id: 'kaze', x: 0.35, y: 0.06, facing: 0, rig: { pal: PALS[1], head: 'hood', scarf: true }, pose: { kind: 'kneel', t: 0.6 } }));
+    A.push(this.kage = this.actor({ id: 'kage', x: 0.44, y: 0.05, facing: 0, rig: { pal: PALS[0], head: 'hood', scarf: true, ...weaponRig(this.g.players[0]) }, pose: { kind: 'kneel', t: 0.6 } }));
+    if (this.coop) A.push(this.kaze = this.actor({ id: 'kaze', x: 0.35, y: 0.06, facing: 0, rig: { pal: PALS[1], head: 'hood', scarf: true, ...weaponRig(this.g.players[1]) }, pose: { kind: 'kneel', t: 0.6 } }));
     this.actors = A;
   }
 
@@ -95,13 +106,21 @@ export class IntroCutscene {
       if (Math.abs(d) < 1e-4) a.tx = null;
     }
     this.dust = Math.max(0, (this.dust || 0) - dt);
+    // atmosphere
+    for (const m of Object.values(this.fx)) m.update(dt);
+    if (this.scene === 'court') {
+      for (let i = 0; i < 3; i++) if (Math.random() < dt * 24) this.splash.push({ x: Math.random(), y: rand(0.62, 1), t: 0 });
+      for (const p of this.splash) p.t += dt;
+      this.splash = this.splash.filter((p) => p.t < 0.35);
+    }
+    if (this.scene === 'road' && !this.fx.dust) this.fx = { dust: new Motes(70, 'dust', [0, 0.1, 1, 0.95]) };
   }
 
   // ---------------------------------------------------------------- drawing
   draw(ctx) {
     const v = this.g.view, W = v.W, H = v.H, k = v.k;
     const gy = H * 0.64;
-    if (this.scene === 'court') this.drawCourt(ctx, W, H, k, gy); else this.drawRoad(ctx, W, H, k, gy);
+    if (this.scene === 'court') { this.drawCourt(ctx, W, H, k, gy); this.drawCourtLife(ctx, W, H, k, gy); } else { this.drawRoad(ctx, W, H, k, gy); this.drawRoadLife(ctx, W, H, k, gy); }
     // actors, back to front
     const list = this.actors.slice().sort((a, b) => a.y - b.y);
     for (const a of list) {
@@ -113,8 +132,20 @@ export class IntroCutscene {
       ctx.fillStyle = `rgba(150,120,90,${this.dust * 0.5})`;
       for (const p of [this.kage, this.kaze]) if (p) { ctx.beginPath(); ctx.ellipse(p.x * W, gy + p.y * H, 60 * k * (1.5 - this.dust * 0.5), 14 * k, 0, 0, TAU); ctx.fill(); }
     }
-    if (this.scene === 'court') this.drawRain(ctx, W, H, k);
-    else this.drawMist(ctx, W, H, k, gy);
+    if (this.scene === 'court') {
+      this.fx.embers.draw(ctx, W, H, k);
+      fog(ctx, W, H, k, this.t, gy + 40 * k, 90 * k, '120,110,150', 0.16, 9, 3, 6); // cold mist over the wet stones
+      this.drawRain(ctx, W, H, k);
+      for (const p of this.splash) { const a = 1 - p.t / 0.35; ctx.strokeStyle = `rgba(190,200,240,${0.45 * a})`; ctx.lineWidth = 1 * k; ctx.beginPath(); ctx.ellipse(p.x * W, p.y * H, (2 + p.t * 30) * k, (0.8 + p.t * 9) * k, 0, 0, TAU); ctx.stroke(); }
+      vignette(ctx, W, H, '4,2,12', 0.7);
+      const L = lightning(this.t, 11, 4); // far-off lightning lights the whole courtyard for a blink
+      if (L > 0) { ctx.fillStyle = `rgba(200,210,255,${0.28 * L})`; ctx.fillRect(0, 0, W, H); }
+    } else {
+      this.drawMist(ctx, W, H, k, gy);
+      this.fx.dust && this.fx.dust.draw(ctx, W, H, k);
+      for (let i = 0; i < 3; i++) flitter(ctx, W * (0.08 + i * 0.12), gy + (40 + i * 26) * k, 1.4 * k, this.t, i * 3.3, 'butterfly', ['#fff4c8', '#f8d8e8', '#ffe8a0'][i]);
+      vignette(ctx, W, H, '40,20,10', 0.45);
+    }
     // letterbox bars
     ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H * 0.07);
     // fade
@@ -127,8 +158,11 @@ export class IntroCutscene {
     const sky = ctx.createLinearGradient(0, 0, 0, gy);
     sky.addColorStop(0, '#05060f'); sky.addColorStop(1, '#241a34');
     ctx.fillStyle = sky; ctx.fillRect(0, 0, W, gy);
+    for (let i = 0; i < 50; i++) { ctx.fillStyle = `rgba(230,230,255,${0.15 + 0.25 * Math.abs(Math.sin(this.t * (0.4 + hsh(i, 5)) + i))})`; ctx.fillRect(hsh(i, 6) * W, hsh(i, 7) * gy * 0.55, 1.4 * k, 1.4 * k); }
+    glow(ctx, W * 0.2, H * 0.17, 120 * k, '200,200,255', 0.12);
     // moon behind clouds
     ctx.fillStyle = 'rgba(240,236,220,0.75)'; ctx.beginPath(); ctx.arc(W * 0.2, H * 0.17, 30 * k, 0, TAU); ctx.fill();
+    fog(ctx, W, H, k, this.t, H * 0.24, 70 * k, '40,34,60', 0.5, 6, 9, 5); // low storm clouds rolling by
     ctx.fillStyle = 'rgba(30,26,44,0.85)'; for (let i = 0; i < 4; i++) { ctx.beginPath(); ctx.ellipse(W * (0.1 + i * 0.12) + Math.sin(this.t * 0.1 + i) * 20 * k, H * (0.16 + (i % 2) * 0.03), 90 * k, 14 * k, 0, 0, TAU); ctx.fill(); }
     // the keep, towering behind the wall
     ctx.save(); ctx.translate(W * 0.62, gy - 120 * k); ctx.scale(k * 1.7, k * 1.7);
@@ -173,6 +207,115 @@ export class IntroCutscene {
     }
     // braziers with flickering fire
     for (const bx of [W * 0.58, W * 0.95]) this.brazier(ctx, bx, gy - 30 * k, k);
+  }
+
+  // the courtyard at night: bats round the keep, patrols with lanterns on the wall walk, lanterns and
+  // banners, silent courtiers watching from the shadows by the wall, crows on the gate roof, a cat
+  // a background character in the game's own style: small, a little darker with distance
+  extra(ctx, x, y, s, rig, o = {}) {
+    drawShadow(ctx, x, y, 14 * s * 0.5, 0.25);
+    drawHumanoid(ctx, { ...rig, x, y, z: 0, facing: o.facing ?? 0, time: this.t + x * 0.01, walk: o.walk ? this.t * 9 + x : 0, move: o.walk ? 1 : 0, s, pose: o.pose || null, flash: 0, alpha: 1, seed: x });
+  }
+
+  drawCourtLife(ctx, W, H, k, gy) {
+    const t = this.t, wy = gy - 92 * k;
+    for (let i = 0; i < 7; i++) { // bats circling the keep
+      const a = t * (0.5 + hsh(i, 2) * 0.4) + i * 0.9, r = (70 + hsh(i, 3) * 90) * k;
+      bat(ctx, W * 0.62 + Math.cos(a) * r * 1.6, gy - 270 * k + Math.sin(a) * r * 0.45, (1.1 + hsh(i, 4)) * k, t + i);
+    }
+    // the wall walk: guards patrolling with lanterns, an archer keeping watch
+    const guard = { pal: KAGERO_PAL, head: 'jingasa', weapon: 'spear', grip: 'pole' };
+    for (let i = 0; i < 3; i++) { // patrols on the wall walk, one carrying a lantern
+      const span = 1.3, u = ((t * 0.018 * (i % 2 ? -1 : 1) + i * 0.43) % span + span) % span - 0.15;
+      this.extra(ctx, u * W, wy - 12 * k, 0.75 * k, i === 1 ? { pal: KAGERO_PAL, head: 'jingasa', weapon: 'lantern', grip: 'down' } : guard, { walk: true, facing: i % 2 ? Math.PI : 0 });
+    }
+    this.extra(ctx, W * 0.9, wy - 12 * k, 0.75 * k, { pal: KAGERO_PAL, head: 'kasa', weapon: 'bow', grip: 'down' }, { facing: Math.PI });
+    // paper lanterns hung under the wall's tile cap
+    for (let i = 0; i < 6; i++) { const x = W * (0.06 + i * 0.17); if (Math.abs(x - W * 0.5) < 110 * k) continue; hangingLantern(ctx, x, wy + 2 * k, k, t, i * 1.7, { col: '#a8261c', label: '影' }); }
+    // crows on the gate roof
+    for (const [dx, sc] of [[-60, 1.3], [-40, 1.1], [52, 1.25]]) crow(ctx, W * 0.5 + dx * k, wy - 22 * k, sc * k, t + dx);
+    // courtiers and servants watching from the dark by the wall, one with a lantern
+    const COURT = [ // retainers and servants watching by the wall
+      { pal: { skin: '#e2b48c', cloth: '#3a2a3a', cloth2: '#241824', sash: '#a8823a', hat: '#141218' }, head: 'eboshi', robe: true },
+      { pal: { skin: '#e8c4a0', cloth: '#4a3a2a', cloth2: '#2a2018', sash: '#7a2a22', hair: '#141016' }, head: 'bandana', robe: true },
+      { pal: { skin: '#e2b48c', cloth: '#2a2a3e', cloth2: '#1a1a28', sash: '#c8a050', hat: '#141218' }, head: 'eboshi', robe: true },
+      { pal: { skin: '#e8c4a0', cloth: '#5a4a3a', cloth2: '#3a2e22', sash: '#3a2a50', hair: '#141016' }, head: 'bandana', robe: true, weapon: 'lantern', grip: 'down' },
+      { pal: { skin: '#e2b48c', cloth: '#3a2a3a', cloth2: '#241824', sash: '#a8823a', hat: '#141218' }, head: 'eboshi', robe: true },
+      { pal: { skin: '#e8c4a0', cloth: '#4a4a52', cloth2: '#2a2a30', sash: '#7a2a22', hair: '#141016' }, head: 'bandana', robe: true },
+    ];
+    COURT.forEach((rig, i) => this.extra(ctx, W * (0.24 + i * 0.045 + hsh(i, 8) * 0.01), gy - 26 * k, (0.95 + hsh(i, 9) * 0.12) * k, rig, { facing: 0 }));
+    // banners in the courtyard, wet and heavy in the rain
+    nobori(ctx, W * 0.03, gy - 4 * k, k, t * 0.6, 1, { col: '#5a0e16', h: 150 });
+    nobori(ctx, W * 0.535, gy - 30 * k, k, t * 0.6, 2, { col: '#5a0e16', h: 130 });
+    nobori(ctx, W * 0.985, gy - 30 * k, k, t * 0.6, 3, { col: '#1a1420', h: 140, mon: '#a8261c' });
+    // a cat slinking along the foot of the wall, back and forth
+    const cu = (t * 0.03) % 2, cx = cu < 1 ? cu : 2 - cu;
+    cat(ctx, W * (0.05 + cx * 0.4), wy + 70 * k, 1.5 * k, t, true, cu < 1 ? 1 : -1, '#08060c');
+    // rain puddles on the stones: reflections of the fires, rippling
+    for (const [px, py, pw] of [[0.3, 0.74, 70], [0.7, 0.8, 110], [0.12, 0.9, 90], [0.52, 0.93, 60]]) {
+      ctx.fillStyle = 'rgba(30,26,46,0.6)'; ctx.beginPath(); ctx.ellipse(px * W, py * H, pw * k, pw * 0.22 * k, 0, 0, TAU); ctx.fill();
+      ctx.fillStyle = `rgba(255,150,80,${0.08 + 0.04 * Math.sin(t * 5 + px * 9)})`; ctx.beginPath(); ctx.ellipse(px * W + 10 * k, py * H, pw * 0.4 * k, pw * 0.07 * k, 0, 0, TAU); ctx.fill();
+      for (let r = 0; r < 2; r++) { const q = (t * 0.9 + r * 0.5 + px) % 1; ctx.strokeStyle = `rgba(200,210,250,${0.25 * (1 - q)})`; ctx.lineWidth = 1 * k; ctx.beginPath(); ctx.ellipse(px * W + (r ? -20 : 15) * k, py * H, q * 26 * k, q * 6 * k, 0, 0, TAU); ctx.stroke(); }
+    }
+    // the braziers' smoke climbing into the rain
+    for (const bx of [W * 0.58, W * 0.95]) for (let i = 0; i < 4; i++) {
+      const q = (t * 0.18 + i / 4) % 1;
+      ctx.fillStyle = `rgba(60,56,70,${0.25 * (1 - q)})`; ctx.beginPath(); ctx.arc(bx + Math.sin(q * 4 + i) * 14 * k, gy - 60 * k - q * 160 * k, (10 + q * 30) * k, 0, TAU); ctx.fill();
+    }
+  }
+
+  // the border road at dawn: a far village waking (smoke, a pagoda), travellers and an ox cart small on the
+  // road ahead, birds in the sky, a dead pine full of crows, a wayside shrine with stone lanterns and jizo
+  drawRoadLife(ctx, W, H, k, gy) {
+    const t = this.t;
+    ctx.save(); ctx.beginPath(); ctx.rect(0, 0, W, gy - 8 * k); ctx.clip(); // the low sun's rays fan out across the sky
+    lightShafts(ctx, W, H, k, t, W * 0.82, gy - 40 * k, '255,220,170', 7, 0.07, 0.7, Math.PI + 0.12);
+    ctx.restore();
+    for (let f = 0; f < 2; f++) for (let i = 0; i < 6; i++) { // geese in a V
+      const u = ((t * 0.025 + f * 0.5) % 1.3) - 0.15, row = Math.ceil(i / 2), side = i % 2 ? 1 : -1;
+      flyingBird(ctx, (u - row * 0.012) * W, H * (0.2 + f * 0.08) + side * row * 9 * k, 1.3 * k, t + i, 'rgba(40,30,40,0.6)');
+    }
+    // the village below the hills: roofs, a pagoda, chimney smoke
+    const vx = W * 0.3, vy = gy - 30 * k;
+    ctx.fillStyle = 'rgba(58,52,72,0.85)';
+    for (let i = 0; i < 9; i++) { const x = vx + (i - 4) * 26 * k + hsh(i, 1) * 8 * k, w = (16 + hsh(i, 2) * 8) * k; ctx.fillRect(x - w / 2, vy - 8 * k, w, 9 * k); ctx.beginPath(); ctx.moveTo(x - w * 0.7, vy - 7 * k); ctx.lineTo(x, vy - 16 * k); ctx.lineTo(x + w * 0.7, vy - 7 * k); ctx.closePath(); ctx.fill(); }
+    for (let tier = 0; tier < 4; tier++) { const w = (22 - tier * 4) * k, yy = vy - 18 * k - tier * 11 * k; ctx.fillRect(W * 0.38 - w * 0.35, yy, w * 0.7, 8 * k); ctx.beginPath(); ctx.moveTo(W * 0.38 - w, yy + 2 * k); ctx.quadraticCurveTo(W * 0.38, yy - 5 * k, W * 0.38 + w, yy + 2 * k); ctx.closePath(); ctx.fill(); }
+    ctx.fillRect(W * 0.38 - 1 * k, vy - 70 * k, 2 * k, 14 * k);
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 5; j++) { // chimney smoke
+      const q = (t * 0.12 + j / 5) % 1, x = vx + (i * 2 - 2) * 26 * k + Math.sin(q * 3 + i) * 8 * k + q * 20 * k;
+      ctx.fillStyle = `rgba(210,200,210,${0.16 * (1 - q)})`; ctx.beginPath(); ctx.arc(x, vy - 16 * k - q * 50 * k, (2 + q * 6) * k, 0, TAU); ctx.fill();
+    }
+    // travellers far down the road, walking away; an ox cart
+    const TRAV = [ // travellers on the road, walking away into the morning
+      { pal: { skin: '#e2b48c', cloth: '#6a5a44', cloth2: '#4a3e2e', sash: '#3a2a20', hat: '#c8a868', wood: '#6a4a2a' }, head: 'kasa', weapon: 'staff', grip: 'pole' },
+      { pal: { skin: '#e6c4a0', cloth: '#3a3a48', cloth2: '#26262e', sash: '#c8a050', metal: '#ddd', wood: '#c8a868' }, head: 'komuso', robe: true, weapon: 'flute', grip: 'down' },
+      { pal: { skin: '#e2b48c', cloth: '#5a6a5a', cloth2: '#3a463a', sash: '#8a3a2a', hat: '#c8a868' }, head: 'kasa' },
+    ];
+    for (let i = 0; i < 3; i++) {
+      const q = ((t * 0.012 + i * 0.3) % 1), d = 1 - q * 0.8, x = W * 0.5 + (i - 1) * 10 * k * d, y = gy - 10 * k + (H - gy) * 0.18 * d;
+      this.extra(ctx, x, y, 0.75 * k * d, TRAV[i], { walk: true, facing: -Math.PI / 2 });
+    }
+    { const q = (t * 0.008) % 1, d = 1 - q * 0.6, x = W * 0.535, y = gy - 10 * k + (H - gy) * 0.24 * d;
+      ctx.fillStyle = `rgba(40,32,30,${0.6 + 0.3 * d})`; ctx.fillRect(x - 12 * k * d, y - 14 * k * d, 24 * k * d, 9 * k * d); // the cart
+      ctx.beginPath(); ctx.arc(x - 6 * k * d, y - 4 * k * d, 4.5 * k * d, 0, TAU); ctx.arc(x + 6 * k * d, y - 4 * k * d, 4.5 * k * d, 0, TAU); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(x - 22 * k * d, y - 8 * k * d, 9 * k * d, 5 * k * d, 0, 0, TAU); ctx.fill(); } // the ox
+    // a dead pine by the border stone, crows on its branches
+    const tx = W * 0.06, ty = gy + 14 * k;
+    ctx.strokeStyle = '#2a2024'; ctx.lineCap = 'round';
+    ctx.lineWidth = 9 * k; ctx.beginPath(); ctx.moveTo(tx, ty); ctx.quadraticCurveTo(tx - 10 * k, ty - 90 * k, tx + 14 * k, ty - 180 * k); ctx.stroke();
+    ctx.lineWidth = 4 * k; for (const [bx, by, ex, ey] of [[4, -120, 60, -150], [8, -150, -40, -175], [2, -90, -50, -105], [12, -170, 50, -200]]) { ctx.beginPath(); ctx.moveTo(tx + bx * k, ty + by * k); ctx.quadraticCurveTo(tx + (bx + ex) / 2 * k, ty + (by + ey) / 2 * k - 10 * k, tx + ex * k, ty + ey * k); ctx.stroke(); }
+    for (const [cx, cy, sc] of [[52, -151, 1.4], [-34, -176, 1.3], [-42, -106, 1.25], [44, -197, 1.2]]) crow(ctx, tx + cx * k, ty + cy * k, sc * k, t + cx);
+    // a wayside shrine with offerings, two stone lanterns and a row of little jizo
+    const sx = W * 0.86, sy = gy + 30 * k;
+    stoneLantern(ctx, sx - 50 * k, sy, k, t, true, '#5a5660'); stoneLantern(ctx, sx + 50 * k, sy, k, t, true, '#5a5660');
+    ctx.fillStyle = '#5a3a2a'; ctx.fillRect(sx - 3 * k, sy - 40 * k, 6 * k, 40 * k);
+    ctx.fillStyle = '#7a5038'; ctx.fillRect(sx - 18 * k, sy - 62 * k, 36 * k, 24 * k);
+    ctx.fillStyle = '#3a2620'; ctx.beginPath(); ctx.moveTo(sx - 26 * k, sy - 60 * k); ctx.lineTo(sx, sy - 76 * k); ctx.lineTo(sx + 26 * k, sy - 60 * k); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#f4ead0'; ctx.fillRect(sx - 3 * k, sy - 56 * k, 6 * k, 10 * k);
+    ctx.fillStyle = '#e8d8b0'; ctx.beginPath(); ctx.arc(sx - 8 * k, sy - 40 * k, 3 * k, 0, TAU); ctx.arc(sx + 8 * k, sy - 40 * k, 3 * k, 0, TAU); ctx.fill(); // rice balls
+    for (let i = 0; i < 4; i++) { const jx = sx - 30 * k + i * 20 * k, jy = sy + 26 * k;
+      ctx.fillStyle = '#8a8a86'; ctx.beginPath(); ctx.ellipse(jx, jy - 9 * k, 6 * k, 9 * k, 0, 0, TAU); ctx.fill(); ctx.beginPath(); ctx.arc(jx, jy - 21 * k, 4.5 * k, 0, TAU); ctx.fill();
+      ctx.fillStyle = '#b8302a'; ctx.beginPath(); ctx.moveTo(jx - 5.5 * k, jy - 16 * k); ctx.lineTo(jx + 5.5 * k, jy - 16 * k); ctx.lineTo(jx, jy - 8 * k); ctx.closePath(); ctx.fill(); }
   }
 
   brazier(ctx, x, y, k) {

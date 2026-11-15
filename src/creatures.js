@@ -222,3 +222,29 @@ export function drawGasha(ctx, o) {
   ctx.strokeStyle = INK; ctx.lineWidth = 1; for (let i = -2; i <= 3; i++) { ctx.beginPath(); ctx.moveTo(1 + i * 1.6, -25); ctx.lineTo(1 + i * 1.6, -23); ctx.stroke(); }
   ctx.restore();
 }
+
+// ---------------- Training dummy: a straw-wrapped post with a crossbar and a painted target (it never fights back)
+export function drawDummy(ctx, o) {
+  const e = o.e, hitK = e ? Math.min(1, (e.hitT || 0) * 4) : 0;
+  ctx.save();
+  ctx.translate(o.x, o.y - (o.z || 0));
+  if (o.alpha !== undefined) ctx.globalAlpha *= o.alpha;
+  ctx.rotate(Math.sin((o.time || 0) * 40) * 0.05 * hitK); // it rocks a little when struck
+  // the post and its base
+  blob(ctx, 0, 0, 14, 5, '#6a5038');
+  ctx.fillStyle = INK; ctx.fillRect(-4.5, -66, 9, 66); ctx.fillStyle = F(o, '#8a6640'); ctx.fillRect(-3, -66, 6, 66);
+  // crossbar arms wrapped in rope
+  ctx.fillStyle = INK; ctx.fillRect(-24, -48, 48, 7); ctx.fillStyle = F(o, '#9a7448'); ctx.fillRect(-23, -47, 46, 5);
+  ctx.strokeStyle = '#d8c08a'; ctx.lineWidth = 1.2; for (const x of [-20, -16, 16, 20]) { ctx.beginPath(); ctx.moveTo(x, -48); ctx.lineTo(x + 2, -41); ctx.stroke(); }
+  // straw body bundle, tied in three places
+  ctx.beginPath(); ctx.moveTo(-11, -56); ctx.quadraticCurveTo(-15, -36, -10, -14); ctx.lineTo(10, -14); ctx.quadraticCurveTo(15, -36, 11, -56); ctx.closePath();
+  ctx.fillStyle = F(o, '#d8b46a'); ctx.fill(); ctx.strokeStyle = INK; ctx.lineWidth = 1.6; ctx.stroke();
+  ctx.strokeStyle = 'rgba(120,84,30,0.55)'; ctx.lineWidth = 1; for (let k = -8; k <= 8; k += 3.2) { ctx.beginPath(); ctx.moveTo(k, -54); ctx.lineTo(k * 1.15, -16); ctx.stroke(); }
+  ctx.strokeStyle = '#7a3a1e'; ctx.lineWidth = 2.4; for (const y of [-50, -34, -19]) { ctx.beginPath(); ctx.moveTo(-12, y); ctx.lineTo(12, y); ctx.stroke(); }
+  // painted target on the chest
+  for (const [r, c] of [[7.5, '#f4ead0'], [5, '#b52a22'], [2.4, '#f4ead0']]) { ctx.fillStyle = F(o, c); ctx.beginPath(); ctx.arc(0, -40, r, 0, TAU); ctx.fill(); }
+  // straw head with a hachimaki
+  blob(ctx, 0, -63, 8.5, 8, F(o, '#d8b46a'));
+  ctx.fillStyle = '#e8e2d2'; ctx.fillRect(-8.5, -66, 17, 3); ctx.fillStyle = '#b52a22'; ctx.beginPath(); ctx.arc(0, -64.5, 1.6, 0, TAU); ctx.fill();
+  ctx.restore();
+}

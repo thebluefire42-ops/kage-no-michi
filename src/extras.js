@@ -22,7 +22,7 @@ function startDash(e, speed, dur) { e.state = 'xdash'; e.t = dur; e.data.hit = f
 function dashCustom(e, dt, g, color) {
   if (e.state !== 'xdash') return false;
   e.t -= dt;
-  if (!e.data.hit && e.hurtPlayerIfIn(0.95, TAU, e.dmg, 7)) e.data.hit = true;
+  if (!e.data.hit && e.hurtInLane(0.95, e.dmg, 7)) e.data.hit = true;
   if (Math.random() < 0.7) g.particles.emit('glow', e.x, e.y, 0.6, 0, 0, 0.2, 0.4, 2.6, color);
   if (e.t <= 0 || g.world.blocked(e.x + e.faceX * 0.6, e.y + e.faceY * 0.6, 0.2)) { e.state = 'recover'; e.t = e.cfg.recover; e.vx *= 0.2; e.vy *= 0.2; }
   return true;

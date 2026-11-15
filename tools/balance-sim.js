@@ -7,6 +7,15 @@ import { rollUpgrades, applyUpgrade } from '/src/cards.js';
 
 const PRIORITY = { baseDamage: 5, critChance: 4, critDamage: 3, healthRegen: 2, energyRegen: 1 };
 
+// how the bot fights with a weapon set: how close it stands, and when it uses the special (E)
+// shield: bash from close in; Bulwark only when 2+ enemies are near enough to hit it (absorb, then release)
+const PROFILES = {
+  melee: { want: 1.4, special: (p) => p.energy > 60 },
+  ranged: { want: 4, special: (p) => p.energy > 60 },
+  shield: { want: 1.6, special: (p, near) => p.energy > 40 && near >= 2 },
+};
+const profileOf = (p) => (p.weapons.some((w) => w.key === 'shield') ? PROFILES.shield : p.weapons.every((w) => w.key === 'crossbow' || w.key === 'knives') ? PROFILES.ranged : PROFILES.melee);
+
 function botStep(g) {
   const p = g.player;
   let best = null, bd = 99;
@@ -21,9 +30,10 @@ function botStep(g) {
   const [sx, sy] = g.view.toScreen(best.x, best.y, 0.5);
   I.mouse.x = sx / g.view.dpr; I.mouse.y = sy / g.view.dpr; I.mode = 'kbm';
   I._keys.add('KeyQ'); I.mouse.down[0] = true;
-  if (p.energy > 60) { I._keys.add('KeyE'); I.mouse.down[2] = true; }
-  const ranged = p.weapons.every((w) => w.key === 'crossbow' || w.key === 'knives');
-  const want = ranged ? 4 : 1.4;
+  const P = profileOf(p), ranged = P === PROFILES.ranged;
+  const near = g.enemies.filter((e) => !e.dead && Math.hypot(e.x - p.x, e.y - p.y) < 2.5).length;
+  if (P.special(p, near)) { I._keys.add('KeyE'); I.mouse.down[2] = true; }
+  const want = P.want;
   const dx = best.x - p.x, dy = best.y - p.y, sxd = dx - dy, syd = dx + dy;
   const dir = bd > want ? 1 : ranged && bd < want - 1.5 ? -1 : 0;
   if (dir) {

@@ -10,7 +10,7 @@
 const DEAD_MOVE = 0.2;
 const DEAD_AIM = 0.3;
 const TRIGGER_ON = 0.3;
-const ACTIONS = ['L1', 'L2', 'R1', 'R2', 'dash', 'pause', 'confirm', 'back', 'up', 'down', 'left', 'right', 'debug', 't1', 't2', 't3'];
+const ACTIONS = ['L1', 'L2', 'R1', 'R2', 'dash', 'pause', 'confirm', 'back', 'up', 'down', 'left', 'right', 'debug', 'select', 't1', 't2', 't3'];
 
 const KEYMAP = {
   L1: ['KeyQ'],
@@ -26,6 +26,7 @@ const KEYMAP = {
   left: ['ArrowLeft', 'KeyA'],
   right: ['ArrowRight', 'KeyD'],
   debug: ['F3'],
+  select: ['Tab', 'KeyL'], // menus: the controller's Back / View button
   t1: ['Digit1', 'Numpad1'], // talents (controller X / Y / B)
   t2: ['Digit2', 'Numpad2'],
   t3: ['Digit3', 'Numpad3'],
@@ -49,7 +50,7 @@ function readPad(gp) {
   const down = {
     L1: b(4), R1: b(5), L2: trig(6, 4), R2: trig(7, 5),
     dash: b(0), confirm: b(0), back: b(1), pause: b(9),
-    up: b(12), down: b(13), left: b(14), right: b(15), debug: b(8),
+    up: b(12), down: b(13), left: b(14), right: b(15), debug: b(8), select: b(8),
     t1: b(2), t2: b(3), t3: b(1), // X, Y, B
   };
   const [lx, ly, lm] = radial(gp.axes[0] || 0, gp.axes[1] || 0, DEAD_MOVE);
@@ -113,7 +114,7 @@ function combine(kbDown, kbMove, pads) {
 export const input = {
   move: { x: 0, y: 0 },
   aimStick: { x: 0, y: 0, active: false },
-  mouse: { x: 0, y: 0, down: [false, false, false], lastMove: 0, clicked: false },
+  mouse: { x: 0, y: 0, down: [false, false, false], lastMove: 0, clicked: false, wheel: 0 }, // wheel: notches since last read (menus clear it)
   mode: 'kbm',
   pad: { connected: false, id: '', buttons: [], axes: [], mapping: '' },
   padCount: 0,
@@ -148,6 +149,7 @@ export const input = {
       this.mouse.x = e.clientX; this.mouse.y = e.clientY;
     });
     addEventListener('mouseup', (e) => { this.mouse.down[e.button] = false; });
+    canvas.addEventListener('wheel', (e) => { if (e.deltaY) this.mouse.wheel += Math.sign(e.deltaY); this._kbmActive = true; }, { passive: true });
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
   },
 

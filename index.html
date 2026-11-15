@@ -6,17 +6,34 @@
   <title>Kage no Michi</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DotGothic16&family=Shippori+Mincho:wght@500;700;800&family=Zen+Kaku+Gothic+New:wght@500;700&display=swap" rel="stylesheet">
+  <!-- fonts load in the background (media swap) so a slow font server never keeps the page blank -->
+  <link href="https://fonts.googleapis.com/css2?family=DotGothic16&family=Shippori+Mincho:wght@500;700;800&family=Zen+Kaku+Gothic+New:wght@500;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <!-- shown until the first frame is drawn; also reports a start-up error instead of a blank screen -->
+  <div id="loading"><div class="ld-title">影の道</div><div class="ld-text">Loading<span class="ld-dots"></span></div><div class="ld-err" hidden></div></div>
+  <script>
+    (function () {
+      var box = document.getElementById('loading'), err = box.querySelector('.ld-err'), shown = false;
+      window.__bootError = function (msg) {
+        if (shown || !box.isConnected) return; shown = true;
+        box.querySelector('.ld-text').textContent = 'Something went wrong while loading';
+        err.hidden = false; err.textContent = msg + '\n\nPress F5 to try again.';
+      };
+      addEventListener('error', function (e) { if (!window.__game) window.__bootError((e.message || 'A file failed to load') + (e.filename ? ' (' + e.filename.split('/').pop() + ':' + e.lineno + ')' : '')); });
+      addEventListener('unhandledrejection', function (e) { if (!window.__game) window.__bootError(String(e.reason && e.reason.message || e.reason)); });
+      // a slow start gets an honest note after a while
+      setTimeout(function () { if (!window.__game && !shown) box.querySelector('.ld-text').textContent = 'Still loading… (press F5 if this takes long)'; }, 12000);
+    })();
+  </script>
   <canvas id="game"></canvas>
   <!-- text boxes used by the online menus (shown/positioned by the game) -->
   <div id="netBox" class="netbox" hidden>
     <input id="netInput" type="text" autocomplete="off" spellcheck="false" maxlength="200">
   </div>
-  <!-- PeerJS: peer-to-peer connections for online co-op -->
-  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-  <script type="module" src="src/main.js"></script>
+  <!-- PeerJS: peer-to-peer connections for online co-op (async: only needed once you go online) -->
+  <script async src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <script type="module" src="src/main.js" onerror="window.__bootError && window.__bootError('A game file could not be loaded (is the server still running?)')"></script>
 </body>
 </html>

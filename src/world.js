@@ -2,6 +2,7 @@
 import { TAU, clamp, lerp, rand, isoX, isoY, seededRng, hash2, dist } from './util.js';
 import { INK } from './rig.js';
 import { sfx } from './audio.js';
+import { POND } from './config.js';
 
 export const BIOMES = [
   {
@@ -40,6 +41,13 @@ const HALL_BIOME = {
   grade: 'rgba(255,170,80,0.06)', vignette: 'rgba(12,2,2,0.62)', dark: 'rgba(24,8,6,0.42)',
 };
 
+// a training hall (dojo): warm wooden floor, indoors in every area
+const DOJO_BIOME = {
+  ...BIOMES[0], key: 'dojo', name: 'Training Hall', jp: '道場',
+  grass: ['#b68654', '#bb8b58', '#c0905c', '#c59560'], outer: '#2a1a10', weather: 'none', night: false, fog: false,
+  trees: [], grade: 'rgba(255,200,140,0.05)', vignette: 'rgba(30,14,6,0.5)',
+};
+
 const P = (x, y, z = 0) => [isoX(x, y), isoY(x, y, z)];
 function poly(ctx, pts, fill, stroke = INK, lw = 1.5) {
   ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
@@ -59,10 +67,15 @@ export class World {
   constructor(levelNum, biomeIdx, seed, opts = {}) {
     this.level = levelNum;
     this.bi = biomeIdx;
-    this.biome = opts.hall ? HALL_BIOME : BIOMES[biomeIdx];
+    // kind: 'town' | 'temple' | 'dojo' | 'library' (the route node's arena) or null (an ordinary level)
+    this.kind = opts.kind || null;
+    // 'training' (the training mode from the main menu) is a small version of the training hall
+    this.dojoLike = this.kind === 'dojo' || this.kind === 'training';
+    this.indoor = !!opts.hall || this.dojoLike;
+    this.biome = opts.hall ? HALL_BIOME : this.dojoLike ? DOJO_BIOME : BIOMES[biomeIdx];
     this.rng = seededRng(seed);
     // every level is a little different: arena size, gate/spawn spots and the road's curve vary
-    this.N = opts.hall ? 24 : this.rng.int(26, 32);
+    this.N = opts.hall ? 24 : this.kind === 'dojo' ? 22 : this.kind === 'training' ? 14 : this.rng.int(26, 32);
     // the throne hall: the throne sits in the back corner, the players enter at the front
     this.hall = opts.hall ? { throne: { x: 3.3, y: 3.3 } } : null;
     this.props = [];
@@ -79,12 +92,35 @@ export class World {
     this.gate = { x: r.range(3.2, 6), y: r.range(3.2, 6), active: false, glow: 0 };
     this.spawn = { x: N - r.range(3.5, 6), y: N - r.range(3.5, 6) };
     if (this.hall) { this.gate = { x: N - 2.5, y: 2.5, active: false, glow: 0 }; this.spawn = { x: N - 4, y: N - 4 }; }
-    this.path = this.makePath();
+    this.temple = null; this.library = null; this.shrine = null;
+    if (this.kind === 'temple') {
+      // the temple stands somewhere near the middle; you climb up to it from the bottom, and leave the way you came
+      const x0 = N / 2 - 3 + r.range(-2.5, 2.5), y0 = N / 2 - 2.5 + r.range(-3, 0.5), x1 = x0 + 6, y1 = y0 + 5, mx = (x0 + x1) / 2;
+      this.temple = { x0, y0, x1, y1, door: null };
+      this.spawn = { x: N - 4.8, y: N - 4.8 };
+      this.gate = { x: N - 2.4, y: N - 2.4, active: false, glow: 0 };
+      this.path = this.makePath(this.spawn, { x: mx, y: y1 + 1.6 });
+    } else if (this.kind === 'shrine') {
+      // an imbuement shrine somewhere near the middle; after the fight you kneel before it to imbue a weapon
+      const cx = N / 2 + r.range(-2.5, 2.5), cy = N / 2 + r.range(-2.5, 2.5), x0 = cx - 1.2, y0 = cy - 1.2, x1 = cx + 1.2, y1 = cy + 1.2;
+      this.shrine = { x0, y0, x1, y1, desk: { x: cx, y: y1 + 1.0 }, ready: false, taken: false };
+      this.path = [...this.makePath(this.spawn, { x: cx, y: y1 + 2.2 }), ...this.makePath({ x: x0 - 1.8, y: y0 - 1.8 }, this.gate)];
+    } else if (this.kind === 'library') {
+      // the library stands in the middle; the road leads up to its open front, and on from behind it to the gate
+      const c = N / 2, x0 = c - 3, y0 = c - 2.5, x1 = c + 3, y1 = c + 2.5;
+      this.library = { x0, y0, x1, y1, desk: { x: c + 0.4, y: c + 0.7 }, ready: false, taken: false };
+      this.path = [...this.makePath(this.spawn, { x: c + 0.5, y: y1 + 1.6 }), ...this.makePath({ x: x0 - 1.6, y: y0 - 1.6 }, this.gate)];
+    } else if (this.dojoLike) {
+      this.spawn = this.kind === 'training' ? { x: N - 3.5, y: N - 3.5 } : { x: N - 4, y: N - 4 };
+      this.gate = { x: N - (this.kind === 'training' ? 4.5 : 5.5), y: 1.0, active: false, glow: 0 }; // the hall's back door
+      this.path = [];
+    }
+    if (!this.path) this.path = this.makePath();
     this.generate();
     // spring atmosphere: butterflies and passing bird flocks
     this.butterflies = [];
     this.birds = null; this.birdT = rand(3, 8);
-    if (biomeIdx === 0) {
+    if (biomeIdx === 0 && !this.indoor) {
       for (let i = 0; i < 12; i++) this.butterflies.push({ x: rand(2, N - 2), y: rand(2, N - 2), z: rand(0.4, 1.2), a: rand(0, TAU), ph: rand(0, 10), col: ['#fff6e0', '#ffd84a', '#f7a8c8', '#ffffff', '#ffb050'][i % 5] });
     }
   }
@@ -98,8 +134,8 @@ export class World {
   }
 
   // winding road from the spawn to the gate (cubic bezier with random bends), sampled every ~0.12 tiles
-  makePath() {
-    const r = this.rng, s = this.spawn, g = this.gate;
+  makePath(s = this.spawn, g = this.gate) {
+    const r = this.rng;
     const dx = g.x - s.x, dy = g.y - s.y, len = Math.hypot(dx, dy), nx = -dy / len, ny = dx / len;
     const b1 = r.range(-5, 5), b2 = r.range(-5, 5);
     const p1 = [s.x + dx * 0.33 + nx * b1, s.y + dy * 0.33 + ny * b1];
@@ -119,7 +155,8 @@ export class World {
   // ---------- generation ----------
   generate() {
     if (this.hall) { this.generateHall(); return; }
-    const r = this.rng, N = this.N, b = this.biome;
+    if (this.dojoLike) { this.generateDojo(); return; }
+    const r = this.rng, N = this.N, b = this.biome, K = this.kind;
     const area = (N * N) / (22 * 22); // more content on bigger maps
     const occ = [];
     for (let i = 0; i < N; i++) { occ.push(new Array(N).fill(false)); }
@@ -138,14 +175,24 @@ export class World {
       if (Math.hypot(cx - sp.x, cy - sp.y) < 3.6) occ[i][j] = true;
       if (Math.hypot(cx - N / 2, cy - N / 2) < 3.4) occ[i][j] = true;
     }
+    // the temple / library and a clear space around it
+    const big = this.temple || this.library || this.shrine;
+    if (big) {
+      mark(big.x0 - 1.2, big.y0 - 1.2, big.x1 + 1.6, big.y1 + 1.6);
+      if (this.temple) mark((big.x0 + big.x1) / 2 - 2.5, big.y1, (big.x0 + big.x1) / 2 + 2.5, big.y1 + 4.5); // the forecourt
+      if (this.shrine) mark(big.x0 - 1.5, big.y1, big.x1 + 1.5, big.y1 + 2.6); // the clearing in front of the shrine
+    }
+    if (this.temple) this.buildTemple();
+    if (this.shrine) this.buildShrine();
+    if (this.library) this.buildLibrary();
     // paddies (spring) / onsen (autumn) / frozen pond (winter)
-    if (this.bi === 0) {
+    if (false) { // (no rice paddies in the levels any more, by request; kept for reference)
       const n = r.int(2, 3) + (area > 1.6 ? 1 : 0);
       for (let k = 0; k < n * 20 && this.paddies.length < n; k++) {
         const w = r.int(3, 5), h = r.int(3, 4), x = r.int(1, N - w - 1), y = r.int(1, N - h - 1);
         if (free(x, y, x + w, y + h)) { this.paddies.push({ x0: x, y0: y, x1: x + w, y1: y + h }); mark(x, y, x + w, y + h); }
       }
-    } else if (this.bi !== 3) {
+    } else if (this.bi !== 3 && K !== 'town') {
       const np = area > 1.6 ? 2 : 1;
       for (let k = 0; k < 60 && this.ponds.length < np; k++) {
         const x = r.int(3, N - 6), y = r.int(3, N - 6);
@@ -156,8 +203,25 @@ export class World {
         }
       }
     }
+    // a large garden pond with a bridge across it (areas 1-2): the water blocks walking (not shots), the bridge doesn't
+    this.bigPond = null;
+    if ((this.bi === 0 || this.bi === 1) && !big && r() < POND.chance * (K === 'town' ? 0.5 : 1)) {
+      for (let k = 0; k < 80 && !this.bigPond; k++) {
+        const along = r() < 0.5 ? 'y' : 'x'; // the direction the bridge runs
+        const L = r.int(POND.long[0], POND.long[1]), S = r.int(POND.short[0], POND.short[1]);
+        const wx = along === 'y' ? L : S, wy = along === 'y' ? S : L;
+        const x0 = r.int(2, N - wx - 2), y0 = r.int(2, N - wy - 2);
+        if (!free(x0 - 1.5, y0 - 1.5, x0 + wx + 1.5, y0 + wy + 1.5)) continue;
+        mark(x0 - 1, y0 - 1, x0 + wx + 1, y0 + wy + 1);
+        const hw = POND.bridgeHalf, c = along === 'y' ? x0 + Math.floor(wx / 2) + 0.5 : y0 + Math.floor(wy / 2) + 0.5;
+        this.bigPond = { x0, y0, x1: x0 + wx, y1: y0 + wy, along, c, hw, koi: [r() * TAU, r() * TAU] };
+        if (along === 'y') this.rects.push({ x0, y0, x1: c - hw, y1: y0 + wy, water: true }, { x0: c + hw, y0, x1: x0 + wx, y1: y0 + wy, water: true });
+        else this.rects.push({ x0, y0, x1: x0 + wx, y1: c - hw, water: true }, { x0, y0: c + hw, x1: x0 + wx, y1: y0 + wy, water: true });
+      }
+    }
     // houses
-    const nh = Math.round((this.bi === 1 ? r.int(2, 4) : r.int(3, 5)) * Math.sqrt(area) + r.int(0, 1));
+    let nh = Math.round((this.bi === 1 ? r.int(2, 4) : r.int(3, 5)) * Math.sqrt(area) + r.int(0, 1));
+    if (K === 'town') nh = Math.round(nh * 2 + 2); else if (K === 'temple') nh = r.int(0, 1); else if (K === 'library') nh = Math.round(nh * 1.2);
     let tries = 0;
     while (this.props.filter((p) => p.kind === 'house').length < nh && tries++ < 300) {
       const w = r.int(2, 4), h = r.int(2, 3);
@@ -189,16 +253,17 @@ export class World {
     };
     // trees
     const A = (lo, hi) => Math.round(r.int(lo, hi) * area);
-    place('tree', this.bi === 3 ? A(2, 4) : A(5, 9), 0.36, () => ({ variant: r.pick(b.trees), h: r.range(2.4, 3.3), blobs: makeBlobs(r) }));
+    const treeMul = K === 'town' ? 0.55 : K === 'temple' ? 1.3 : 1;
+    place('tree', Math.round((this.bi === 3 ? A(2, 4) : A(5, 9)) * treeMul), 0.36, () => ({ variant: r.pick(b.trees), h: r.range(2.4, 3.3), blobs: makeBlobs(r) }));
     if (this.bi === 1) place('bamboo', A(3, 5), 0.55, () => ({ stalks: Array.from({ length: r.int(5, 8) }, () => [r.range(-0.45, 0.45), r.range(-0.45, 0.45), r.range(3, 4.3), r() * 10]) }), 0.8);
     place('lantern', this.bi === 3 ? A(4, 6) : A(2, 4), 0.28);
     if (this.bi === 3) place('brazier', A(2, 3), 0.3);
     place('rock', A(2, 5), 0.42, () => ({ s: r.range(0.7, 1.2), pts: Array.from({ length: 8 }, (_, i) => r.range(0.75, 1.1)) }));
-    if (this.bi === 0) place('scarecrow', A(1, 2), 0.2);
-    if (this.bi !== 3) place('bales', A(1, 2), 0.5);
-    if (this.bi !== 3) place('jizo', A(1, 2), 0.25);
+    if (this.bi === 0 && !K) place('scarecrow', A(1, 2), 0.2);
+    if (this.bi !== 3 && K !== 'temple') place('bales', A(1, 2), 0.5);
+    if (this.bi === 1 || this.bi === 2) place('jizo', A(1, 2), 0.25); // (not in area 1)
     place('banner', this.bi === 3 ? A(4, 5) : A(2, 3), 0.12, () => ({ color: this.bi === 3 ? r.pick(['#8a1420', '#1a1418']) : r.pick(['#c23b2e', '#2e4a8a', '#e8e0cc']) }));
-    if (this.bi !== 3 && r() < 0.6) place('well', 1 + (r() < area - 1 ? 1 : 0), 0.55);
+    if (this.bi !== 3 && (r() < 0.6 || K === 'town')) place('well', 1 + (r() < area - 1 || K === 'town' ? 1 : 0), 0.55);
 
     // lights for lanterns
     for (const p of this.props) if (p.kind === 'lantern') this.lights.push({ x: p.x, y: p.y, z: 0.9, r: this.bi >= 2 ? 3.2 : 2.2, color: '255,190,110', flicker: 0.5, i: 0.9, prop: p });
@@ -233,6 +298,8 @@ export class World {
       const x = r.range(-1, N + 1), y = r.range(-1, N + 1);
       if (this.nearPath(x, y, 1.1)) continue;
       if (this.paddies.some((p) => x > p.x0 && x < p.x1 && y > p.y0 && y < p.y1)) continue;
+      const BP = this.bigPond; if (BP && x > BP.x0 - 0.3 && x < BP.x1 + 0.3 && y > BP.y0 - 0.3 && y < BP.y1 + 0.3) continue;
+      if (big && x > big.x0 - 0.4 && x < big.x1 + 0.4 && y > big.y0 - 0.4 && y < big.y1 + (this.temple ? 4.5 : this.shrine ? 2.6 : 0.4)) continue;
       this.tufts.push({ x, y, h: r.range(0.5, 1), c: r.int(0, 2), ph: r() * 10, flower: this.bi === 0 && r() < 0.18 ? r.pick(['#f7d6e0', '#fff6d0', '#f2a0b8', '#e8e0ff']) : null });
     }
     for (const p of this.paddies) {
@@ -282,6 +349,80 @@ export class World {
     this.mountainSeed = 0;
   }
 
+  // ---------- special arenas (route nodes) ----------
+  // Temple: the hall on its stone platform at the top of the map, a gravel forecourt with paired stone
+  // lanterns and an incense burner in front of the steps. The monk steps out of its doors.
+  buildTemple() {
+    const T = this.temple, mx = (T.x0 + T.x1) / 2;
+    const prop = { kind: 'temple', x: mx, y: (T.y0 + T.y1) / 2, x0: T.x0, y0: T.y0, x1: T.x1, y1: T.y1, seed: this.rng() * 100 };
+    this.props.push(prop);
+    this.rects.push({ x0: T.x0, y0: T.y0, x1: T.x1, y1: T.y1 });
+    T.door = { house: prop, x: mx, y: T.y1 + 0.2, ox: mx, oy: T.y1 + 1.6 };
+    for (const d of [1.6, 3.4]) for (const s of [-1, 1]) { const x = mx + s * 2.2, y = T.y1 + d; this.props.push({ kind: 'lantern', x, y, seed: d * 10 + s }); this.circles.push({ x, y, r: 0.28 }); }
+    const ky = T.y1 + 3.0;
+    this.props.push({ kind: 'koro', x: mx, y: ky }); this.circles.push({ x: mx, y: ky, r: 0.38 });
+    this.emitters.push({ kind: 'incense', x: mx, y: ky, z: 0.9, t: 0 });
+  }
+
+  // Imbuement shrine: a small hokora on a stone platform with a shimenawa rope, two fox guardians and lanterns.
+  // Elemental lights gather around it once the fight is over (world.shrine.ready).
+  buildShrine() {
+    const S = this.shrine, { x0, y0, x1, y1 } = S, cx = (x0 + x1) / 2;
+    this.props.push({ kind: 'shrine', x: cx, y: (y0 + y1) / 2, x0, y0, x1, y1 });
+    this.rects.push({ x0: x0 + 0.1, y0: y0 + 0.1, x1: x1 - 0.1, y1: y1 - 0.1 });
+    for (const s of [-1, 1]) { const x = cx + s * 1.9, y = y1 + 0.4; this.props.push({ kind: 'kitsune', x, y, side: s }); this.circles.push({ x, y, r: 0.3 }); }
+    for (const s of [-1, 1]) { const x = cx + s * 2.0, y = y1 + 1.9; this.props.push({ kind: 'lantern', x, y, seed: s * 3 }); this.circles.push({ x, y, r: 0.28 }); }
+    this.lights.push({ x: cx, y: y1, z: 1, r: 4, color: '200,220,255', flicker: 0.4, i: 0.7 });
+  }
+
+  // Library: an open-fronted hall in the middle of a town. Bookshelves line its back walls, two more stand
+  // inside, the front is open between pillars, and the scroll waits on the desk.
+  buildLibrary() {
+    const Lb = this.library, { x0, y0, x1, y1 } = Lb;
+    // the back walls, one tile per prop so whoever walks behind the library is hidden by them
+    for (let c = x0 + 0.5; c < x1; c += 1) this.props.push({ kind: 'libwall', axis: 'x', x: c, y: y0, seed: c * 3.1 });
+    for (let c = y0 + 0.5; c < y1; c += 1) this.props.push({ kind: 'libwall', axis: 'y', x: x0, y: c, seed: c * 5.7 });
+    this.rects.push({ x0: x0 - 0.3, y0: y0 - 0.3, x1, y1: y0 + 0.3 }, { x0: x0 - 0.3, y0: y0 - 0.3, x1: x0 + 0.3, y1 });
+    for (const x of [x0 + 2, x0 + 4, x1]) { this.props.push({ kind: 'libpillar', x, y: y1 }); this.circles.push({ x, y: y1, r: 0.2 }); }
+    this.props.push({ kind: 'libpillar', x: x0, y: y1 }); this.circles.push({ x: x0, y: y1, r: 0.2 });
+    for (const y of [y0, y0 + 2.5]) { this.props.push({ kind: 'libpillar', x: x1, y }); this.circles.push({ x: x1, y, r: 0.2 }); }
+    const shelves = [{ axis: 'x', x: x0 + 3.6, y: y0 + 1.5, len: 2.2 }, { axis: 'y', x: x0 + 1.5, y: y0 + 3.0, len: 1.8 }];
+    for (const s of shelves) {
+      this.props.push({ kind: 'shelf', ...s, seed: s.x * 7 + s.y });
+      const hx = s.axis === 'x' ? s.len / 2 : 0.25, hy = s.axis === 'x' ? 0.25 : s.len / 2;
+      this.rects.push({ x0: s.x - hx, y0: s.y - hy, x1: s.x + hx, y1: s.y + hy });
+    }
+    const D = Lb.desk;
+    this.props.push({ kind: 'desk', x: D.x, y: D.y });
+    this.rects.push({ x0: D.x - 0.65, y0: D.y - 0.32, x1: D.x + 0.65, y1: D.y + 0.32 });
+    this.props.push({ kind: 'libroof', x: x1, y: y1, x0, y0, x1, y1 });
+    this.lights.push({ x: (x0 + x1) / 2, y: (y0 + y1) / 2, z: 1.2, r: 4.5, color: '255,200,120', flicker: 0.3, i: 0.8 });
+    for (const [x, y] of [[x0 - 0.9, y1 + 1.0], [x1 + 1.0, y0 - 0.9]]) { this.props.push({ kind: 'lantern', x, y, seed: x }); this.circles.push({ x, y, r: 0.28 }); }
+  }
+
+  // Training hall: one big wooden hall with a tatami floor, four pillars, shoji walls with sliding doors
+  // the fighters step out of, weapon racks, a small shrine shelf, a hanging scroll and a drum.
+  generateDojo() {
+    const N = this.N, small = this.kind === 'training'; // the training room: no pillars, no doors for fighters
+    if (!small) for (const [x, y] of [[5.5, 5.5], [5.5, N - 5.5], [N - 5.5, 5.5], [N - 5.5, N - 5.5]]) { this.props.push({ kind: 'pillar', style: 'dojo', x, y }); this.circles.push({ x, y, r: 0.36 }); }
+    const doorsX = small ? [] : [5.5, 11.5], doorsY = small ? [] : [7.5, 14.5], exitX = this.gate.x;
+    const shrineAt = small ? 4.5 : 8.5, scrollAt = small ? 6.5 : 11.5;
+    for (let i = 0; i < N; i++) {
+      const c = i + 0.5;
+      if (c === exitX) this.props.push({ kind: 'exitdoor', axis: 'x', x: c, y: -0.1, outer: true });
+      else if (doorsX.includes(c)) this.props.push({ kind: 'hdoor', style: 'dojo', axis: 'x', x: c, y: -0.1, dx: c, dy: 0.4, ox: c, oy: 1.5, outer: true });
+      else this.props.push({ kind: 'screen', style: 'dojo', axis: 'x', x: c, y: -0.1, seed: i, deco: c === shrineAt ? 'shrine' : null, outer: true });
+      if (doorsY.includes(c)) this.props.push({ kind: 'hdoor', style: 'dojo', axis: 'y', x: -0.1, y: c, dx: 0.4, dy: c, ox: 1.5, oy: c, outer: true });
+      else this.props.push({ kind: 'screen', style: 'dojo', axis: 'y', x: -0.1, y: c, seed: i + 50, deco: c === scrollAt ? 'scroll' : null, outer: true });
+      this.props.push({ kind: 'rail', style: 'dojo', axis: 'x', x: c, y: N + 0.1, outer: true }, { kind: 'rail', style: 'dojo', axis: 'y', x: N + 0.1, y: c, outer: true });
+    }
+    // weapon racks against the walls (clear of the doors)
+    for (const x of small ? [2.2] : [2.6, 14.0]) { this.props.push({ kind: 'rack', axis: 'x', x, y: 0.7, seed: x }); this.rects.push({ x0: x - 0.75, y0: 0.45, x1: x + 0.75, y1: 0.95 }); }
+    for (const y of small ? [3.2, 10.6] : [3.6, 18.0]) { this.props.push({ kind: 'rack', axis: 'y', x: 0.7, y, seed: y }); this.rects.push({ x0: 0.45, y0: y - 0.75, x1: 0.95, y1: y + 0.75 }); }
+    this.props.push({ kind: 'taiko', x: 2.2, y: N - 2.6 }); this.circles.push({ x: 2.2, y: N - 2.6, r: 0.55 });
+    this.mountainSeed = 0;
+  }
+
   // ---------- collision ----------
   collide(e) {
     const N = this.N, rad = e.r;
@@ -306,10 +447,11 @@ export class World {
     }
     return hit;
   }
-  blocked(x, y, rad = 0.1) {
+  // shot: a projectile asking (they fly over water)
+  blocked(x, y, rad = 0.1, shot = false) {
     const N = this.N;
     if (x < 0.3 || y < 0.3 || x > N - 0.3 || y > N - 0.3) return true;
-    for (const q of this.rects) if (x > q.x0 - rad && x < q.x1 + rad && y > q.y0 - rad && y < q.y1 + rad) return true;
+    for (const q of this.rects) if (!(shot && q.water) && x > q.x0 - rad && x < q.x1 + rad && y > q.y0 - rad && y < q.y1 + rad) return true;
     for (const c of this.circles) if ((x - c.x) ** 2 + (y - c.y) ** 2 < (c.r + rad) ** 2) return true;
     return false;
   }
@@ -341,6 +483,7 @@ export class World {
     this.groundCanvas = c; this.groundRect = [minX, minY, w, h];
 
     if (this.hall) { this.buildHallGround(g, N, E, r); return; }
+    if (this.dojoLike) { this.buildDojoGround(g, N, E, r); return; }
     // tiles
     for (let i = -E; i < N + E; i++) for (let j = -E; j < N + E; j++) {
       const out = Math.max(0, -i, -j, i - N + 1, j - N + 1);
@@ -437,6 +580,10 @@ export class World {
         for (let k = 0; k < 6; k++) { g.beginPath(); let cx = sx + r.range(-R, R) * 0.8, cy = sy + r.range(-R, R) * 0.3; g.moveTo(cx, cy); for (let s = 0; s < 3; s++) { cx += r.range(-14, 14); cy += r.range(-5, 5); g.lineTo(cx, cy); } g.stroke(); }
       }
     }
+    if (this.bigPond) this.bakeBigPond(g, r);
+    if (this.temple) this.bakeTempleCourt(g, r);
+    if (this.library) this.bakeLibraryFloor(g, r);
+    if (this.shrine) { const S = this.shrine, cx = (S.x0 + S.x1) / 2; poly(g, [P(S.x0 - 1.4, S.y1), P(S.x1 + 1.4, S.y1), P(S.x1 + 1.4, S.y1 + 2.6), P(S.x0 - 1.4, S.y1 + 2.6)], this.bi === 2 ? '#dfe4ec' : '#d2c8b2', 'rgba(60,50,40,0.3)', 1.5); g.strokeStyle = 'rgba(120,110,90,0.3)'; g.lineWidth = 1; for (let y = S.y1 + 0.25; y < S.y1 + 2.6; y += 0.25) { const a = P(S.x0 - 1.4, y), c = P(S.x1 + 1.4, y); g.beginPath(); g.moveTo(a[0], a[1]); g.lineTo(c[0], c[1]); g.stroke(); } void cx; }
     // biome ground details
     if (this.bi === 1) {
       const cols = ['#d9482b', '#e8742f', '#c23a22', '#f0b040', '#b5302a'];
@@ -515,7 +662,7 @@ export class World {
       b.z = 0.7 + Math.sin(t * 1.3 + b.ph) * 0.35;
       if (b.x < 1 || b.x > this.N - 1 || b.y < 1 || b.y > this.N - 1) b.a += Math.PI * dt * 3;
     }
-    if (this.bi === 0) {
+    if (this.bi === 0 && !this.indoor) {
       this.birdT -= dt;
       if (this.birdT <= 0 && !this.birds) {
         this.birds = { x: -8, y: rand(0, this.N), vx: 5.5, vy: rand(-1.5, 1.5), n: randiSafe(4, 7), t: 0 };
@@ -548,6 +695,10 @@ export class World {
         case 'brazier':
           e.t = 0.05;
           parts.emit('ember', e.x + rand(-0.2, 0.2), e.y + rand(-0.2, 0.2), e.z + 0.2, rand(-0.3, 0.3) + w * 0.3, rand(-0.3, 0.3), rand(1.2, 2.6), rand(0.5, 1.2), rand(1, 2), Math.random() < 0.5 ? '#ffb040' : '#ff6a20', { drag: 0.5 });
+          break;
+        case 'incense': // a thin thread of incense smoke from the temple's burner
+          e.t = 0.18;
+          parts.emit('smoke', e.x + rand(-0.1, 0.1), e.y + rand(-0.1, 0.1), e.z, w * 0.25, -0.05, 0.55, 3.2, rand(2.5, 4), 'rgba(225,225,235,1)', { drag: 0.2 });
           break;
         case 'steam':
           e.t = 0.12;
@@ -608,6 +759,14 @@ export class World {
   // ---------- background (screen space) ----------
   drawBackground(ctx, view, t) {
     const b = this.biome, W = view.W, H = view.H;
+    if (this.dojoLike) { // indoors: dark wooden walls and beams
+      const hg = ctx.createLinearGradient(0, 0, 0, H);
+      hg.addColorStop(0, '#120a06'); hg.addColorStop(1, '#2e1c10');
+      ctx.fillStyle = hg; ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = 'rgba(255,220,170,0.05)';
+      for (let i = 0; i < 6; i++) ctx.fillRect(0, H * (0.08 + i * 0.07), W, 3 * view.k);
+      return;
+    }
     if (this.hall) { // indoors: dark lacquered beams, glints of gold
       const hg = ctx.createLinearGradient(0, 0, 0, H);
       hg.addColorStop(0, '#0c0404'); hg.addColorStop(1, '#2a0e0a');
@@ -702,11 +861,12 @@ export class World {
     for (const pd of this.ponds) if (pd.kind === 'onsen') {
       const sx = isoX(pd.x, pd.y), sy = isoY(pd.x, pd.y);
       for (let k = 0; k < 3; k++) {
-        const rr = ((t * 0.4 + k / 3) % 1);
+        const rr = (((t * 0.4 + k / 3) % 1) + 1) % 1; // always 0..1, even if the clock dips below zero
         ctx.strokeStyle = `rgba(255,255,255,${0.35 * (1 - rr)})`; ctx.lineWidth = 1.2;
         ctx.beginPath(); ctx.ellipse(sx, sy, rr * pd.r * 40, rr * pd.r * 20, 0, 0, TAU); ctx.stroke();
       }
     }
+    if (this.bigPond) this.drawBigPond(ctx, t);
     // cloud shadows
     if (!this.biome.night) {
       for (const c of this.clouds) {
@@ -735,6 +895,95 @@ export class World {
       g.addColorStop(0, `rgba(255,220,140,${0.55 * this.gate.glow})`); g.addColorStop(1, 'rgba(255,220,140,0)');
       ctx.fillStyle = g; ctx.save(); ctx.translate(sx, sy); ctx.scale(1, 0.5); ctx.beginPath(); ctx.arc(0, 0, 90, 0, TAU); ctx.restore(); ctx.fill();
     }
+  }
+
+  // ---- the large garden pond
+  // its outline: a rounded rectangle in world space, sampled into points
+  pondOutline(inset = 0.08, rad = 0.6) {
+    const B = this.bigPond, x0 = B.x0 + inset, y0 = B.y0 + inset, x1 = B.x1 - inset, y1 = B.y1 - inset, pts = [];
+    const corners = [[x1 - rad, y0 + rad, -Math.PI / 2], [x1 - rad, y1 - rad, 0], [x0 + rad, y1 - rad, Math.PI / 2], [x0 + rad, y0 + rad, Math.PI]];
+    for (const [cx, cy, a0] of corners) for (let i = 0; i <= 6; i++) { const a = a0 + (i / 6) * (Math.PI / 2); pts.push([cx + Math.cos(a) * rad, cy + Math.sin(a) * rad]); }
+    return pts;
+  }
+  bakeBigPond(g, r) {
+    const B = this.bigPond, autumn = this.bi === 1;
+    const path = (pts) => { g.beginPath(); pts.forEach(([x, y], i) => { const [sx, sy] = P(x, y); i ? g.lineTo(sx, sy) : g.moveTo(sx, sy); }); g.closePath(); };
+    const out = this.pondOutline(0.08), [ax, ay] = P(B.x0, B.y0), [bx, by] = P(B.x1, B.y1);
+    // damp earth bank, then the water (deeper toward the middle)
+    path(out); g.strokeStyle = 'rgba(70,56,40,0.55)'; g.lineWidth = 12; g.lineJoin = 'round'; g.stroke();
+    const wg = g.createLinearGradient(0, Math.min(ay, by) - 40, 0, Math.max(ay, by) + 40);
+    wg.addColorStop(0, autumn ? '#7aa8a8' : '#86c6d6'); wg.addColorStop(1, autumn ? '#2e5a64' : '#3a7896');
+    path(out); g.fillStyle = wg; g.fill();
+    g.save(); path(out); g.clip();
+    path(out); g.strokeStyle = 'rgba(20,40,60,0.35)'; g.lineWidth = 14; g.stroke(); // darker water along the edge
+    g.strokeStyle = 'rgba(255,255,255,0.28)'; g.lineWidth = 2; // sky reflections
+    for (let k = 0; k < 9; k++) { const [sx, sy] = P(r.range(B.x0 + 0.6, B.x1 - 0.6), r.range(B.y0 + 0.6, B.y1 - 0.6)); g.beginPath(); g.moveTo(sx - 18, sy); g.lineTo(sx + 18, sy); g.stroke(); }
+    // lily pads with a few flowers (spring) / fallen maple leaves (autumn)
+    for (let k = 0; k < (autumn ? 16 : 9); k++) {
+      const [sx, sy] = P(r.range(B.x0 + 0.5, B.x1 - 0.5), r.range(B.y0 + 0.5, B.y1 - 0.5));
+      if (autumn) { g.fillStyle = ['#c8301e', '#e0602a', '#f0a030'][k % 3]; g.beginPath(); g.ellipse(sx, sy, 4, 2.4, r.range(0, 3), 0, TAU); g.fill(); continue; }
+      const s = r.range(7, 11);
+      g.fillStyle = '#4e8a3a'; g.beginPath(); g.ellipse(sx, sy, s, s * 0.5, 0, 0.35, TAU - 0.15); g.lineTo(sx, sy); g.closePath(); g.fill();
+      g.strokeStyle = 'rgba(20,40,20,0.5)'; g.lineWidth = 1; g.stroke();
+      if (k % 3 === 0) { g.fillStyle = '#f7c8d8'; g.beginPath(); g.arc(sx + 2, sy - 3, 3, 0, TAU); g.fill(); g.fillStyle = '#fff4c0'; g.beginPath(); g.arc(sx + 2, sy - 3, 1.2, 0, TAU); g.fill(); }
+    }
+    g.restore();
+    // rim stones all around
+    const rim = this.pondOutline(0.02);
+    for (let i = 0; i < rim.length; i++) {
+      const [x0, y0] = rim[i], [x1, y1] = rim[(i + 1) % rim.length], n = Math.max(1, Math.round(Math.hypot(x1 - x0, y1 - y0) / 0.42));
+      for (let k = 0; k < n; k++) {
+        const u = k / n, [sx, sy] = P(x0 + (x1 - x0) * u, y0 + (y1 - y0) * u);
+        const s = r.range(5.5, 9);
+        g.fillStyle = shade(autumn ? '#8a8276' : '#9a968c', r.range(-0.15, 0.12)); g.strokeStyle = INK; g.lineWidth = 1.1;
+        g.beginPath(); g.ellipse(sx, sy - 2, s, s * 0.62, r.range(-0.3, 0.3), 0, TAU); g.fill(); g.stroke();
+        g.fillStyle = 'rgba(255,255,255,0.18)'; g.beginPath(); g.ellipse(sx - s * 0.25, sy - 2 - s * 0.25, s * 0.45, s * 0.22, 0, 0, TAU); g.fill();
+      }
+    }
+  }
+  // drawn every frame over the ground: water glints, two koi and the bridge
+  drawBigPond(ctx, t) {
+    const B = this.bigPond, cx = (B.x0 + B.x1) / 2, cy = (B.y0 + B.y1) / 2;
+    for (let k = 0; k < 7; k++) {
+      const fx = B.x0 + 0.6 + hash2(k, B.x0) * (B.x1 - B.x0 - 1.2), fy = B.y0 + 0.6 + hash2(B.y0, k) * (B.y1 - B.y0 - 1.2);
+      const a = Math.max(0, Math.sin(t * 1.3 + k * 1.9));
+      ctx.strokeStyle = `rgba(255,255,255,${0.45 * a})`; ctx.lineWidth = 1.5;
+      const sx = isoX(fx, fy), sy = isoY(fx, fy); ctx.beginPath(); ctx.moveTo(sx - 9, sy); ctx.lineTo(sx + 9, sy); ctx.stroke();
+    }
+    // koi circling slowly in the open water on either side of the bridge
+    B.koi.forEach((ph, i) => {
+      const side = i ? 1 : -1, half = B.along === 'y' ? (B.x1 - B.x0) / 4 : (B.y1 - B.y0) / 4;
+      const ox = B.along === 'y' ? cx + side * half * 1.1 : cx, oy = B.along === 'y' ? cy : cy + side * half * 1.1;
+      const a = ph + t * 0.35 * (i ? 1 : -1), rx = 0.9, ry = 0.6;
+      const x = ox + Math.cos(a) * rx, y = oy + Math.sin(a) * ry;
+      const dx = -Math.sin(a) * rx * (i ? 1 : -1), dy = Math.cos(a) * ry * (i ? 1 : -1), ang = Math.atan2(isoY(dx, dy) - isoY(0, 0), isoX(dx, dy) - isoX(0, 0));
+      ctx.save(); ctx.translate(isoX(x, y), isoY(x, y)); ctx.rotate(ang); ctx.globalAlpha = 0.85;
+      ctx.fillStyle = i ? '#f08a3a' : '#f4f0e8'; ctx.beginPath(); ctx.ellipse(0, 0, 8, 3, 0, 0, TAU); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(-7, 0); ctx.lineTo(-12, -3 + Math.sin(t * 8 + i) * 1.5); ctx.lineTo(-12, 3 + Math.sin(t * 8 + i) * 1.5); ctx.closePath(); ctx.fill();
+      if (!i) { ctx.fillStyle = '#e04a2a'; ctx.beginPath(); ctx.arc(2, 0, 2, 0, TAU); ctx.fill(); }
+      ctx.restore();
+    });
+    // the bridge: a gently arched wooden deck with vermilion rails
+    const len0 = (B.along === 'y' ? B.y0 : B.x0) - 0.55, len1 = (B.along === 'y' ? B.y1 : B.x1) + 0.55, W = B.hw * 0.92, arc = 0.22;
+    const pt = (a, u, z = 0) => { const b = len0 + (len1 - len0) * u, x = B.along === 'y' ? B.c + a : b, y = B.along === 'y' ? b : B.c + a; return [isoX(x, y), isoY(x, y, z + arc * Math.sin(Math.PI * u))]; };
+    const n = 16;
+    const rail = (a) => { // posts and a top rail along one edge
+      ctx.strokeStyle = INK; ctx.lineWidth = 4.5; ctx.lineCap = 'round';
+      ctx.beginPath(); for (let i = 0; i <= n; i++) { const [sx, sy] = pt(a, i / n, 0.5); i ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy); } ctx.stroke();
+      for (let i = 0; i <= n; i += 2) { const [bx, by] = pt(a, i / n), [tx, ty] = pt(a, i / n, 0.55); ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(tx, ty); ctx.stroke(); }
+      ctx.strokeStyle = '#c0392b'; ctx.lineWidth = 2.6;
+      ctx.beginPath(); for (let i = 0; i <= n; i++) { const [sx, sy] = pt(a, i / n, 0.5); i ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy); } ctx.stroke();
+      for (let i = 0; i <= n; i += 2) { const [bx, by] = pt(a, i / n), [tx, ty] = pt(a, i / n, 0.55); ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(tx, ty); ctx.stroke(); }
+      for (const u of [0, 1]) { const [tx, ty] = pt(a, u, 0.62); ctx.fillStyle = '#c9a24a'; ctx.beginPath(); ctx.arc(tx, ty, 3, 0, TAU); ctx.fill(); ctx.strokeStyle = INK; ctx.lineWidth = 1; ctx.stroke(); } // giboshi caps
+    };
+    rail(-W); // the far rail first
+    ctx.beginPath(); // the deck
+    for (let i = 0; i <= n; i++) { const [sx, sy] = pt(-W, i / n); i ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy); }
+    for (let i = n; i >= 0; i--) { const [sx, sy] = pt(W, i / n); ctx.lineTo(sx, sy); }
+    ctx.closePath(); ctx.fillStyle = '#8a5e3a'; ctx.fill(); ctx.strokeStyle = INK; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.strokeStyle = 'rgba(40,24,12,0.45)'; ctx.lineWidth = 1; // planks
+    for (let i = 1; i < n * 2; i++) { const [ax, ay] = pt(-W, i / (n * 2)), [bx, by] = pt(W, i / (n * 2)); ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke(); }
+    rail(W); // the near rail
   }
 
   drawTufts(ctx, t, players) {
@@ -774,7 +1023,15 @@ export class World {
   }
 
   // ---------- props ----------
-  depthOf(p) { return p.kind === 'house' ? p.x + p.y + 0.6 : p.x + p.y; }
+  depthOf(p) {
+    switch (p.kind) {
+      case 'house': return p.x + p.y + 0.6;
+      case 'temple': return Math.min(p.x0 + p.y1, p.x1 + p.y0) - 0.3;
+      case 'shrine': return p.x + p.y + 0.4;
+      case 'libroof': return p.x1 + p.y1 + 1.2;
+      default: return p.x + p.y;
+    }
+  }
 
   // returns screen-space bounding box (for occlusion fading)
   boundsOf(p) {
@@ -788,6 +1045,17 @@ export class World {
       case 'throne': return [sx - 50, sy - 120, 100, 125];
       case 'screen': case 'hdoor': case 'fwall': return [sx - 40, sy - 100, 80, 105];
       case 'banner': return [sx - 10, sy - 100, 50, 100];
+      case 'temple': return boxBounds(p.x0 - 1, p.y0 - 1, p.x1 + 1, p.y1 + 1.2, 5);
+      case 'shrine': return boxBounds(p.x0 - 1.2, p.y0 - 1.2, p.x1 + 1.2, p.y1 + 1.2, 4);
+      case 'kitsune': return [sx - 20, sy - 50, 40, 55];
+      case 'libwall': return [sx - 40, sy - 90, 80, 100];
+      case 'libroof': return boxBounds(p.x0 - 0.6, p.y0 - 0.6, p.x1 + 0.6, p.y1 + 0.6, 3.8);
+      case 'libpillar': return [sx - 12, sy - 75, 24, 80];
+      case 'shelf': return [sx - 50, sy - 80, 100, 95];
+      case 'desk': return [sx - 50, sy - 60, 100, 70];
+      case 'rack': return [sx - 50, sy - 70, 100, 80];
+      case 'exitdoor': return [sx - 40, sy - 100, 80, 105];
+      case 'taiko': return [sx - 40, sy - 70, 80, 75];
       default: return [sx - 25, sy - 50, 50, 55];
     }
   }
@@ -814,6 +1082,18 @@ export class World {
       case 'screen': return this.drawScreen(ctx, p, t);
       case 'hdoor': return this.drawHallDoor(ctx, p, t);
       case 'rail': return this.drawRail(ctx, p);
+      case 'temple': return this.drawTemple(ctx, p, t);
+      case 'shrine': return this.drawShrine(ctx, p, t);
+      case 'kitsune': return this.drawKitsuneStatue(ctx, p);
+      case 'koro': return this.drawKoro(ctx, p);
+      case 'libwall': return this.drawLibWall(ctx, p);
+      case 'libpillar': return this.drawLibPillar(ctx, p);
+      case 'libroof': return this.drawLibRoof(ctx, p);
+      case 'shelf': return this.drawShelf(ctx, p);
+      case 'desk': return this.drawDesk(ctx, p, t);
+      case 'rack': return this.drawRack(ctx, p);
+      case 'taiko': return this.drawTaiko(ctx, p);
+      case 'exitdoor': return this.drawExitDoor(ctx, p, t);
     }
   }
 
@@ -991,7 +1271,34 @@ export class World {
         const s3 = sway * (1 + bl[1] * -0.02) + Math.sin(t * 2 + bl[0]) * 0.8;
         ctx.beginPath(); ctx.arc(cx + bl[0] + s3 - layer * 0.8, cy + bl[1] - layer * 1.2, bl[2] * (1 - layer * 0.12), 0, TAU); ctx.fill();
       }
+      if (p.variant === 'cherry' && layer === 1) { // dark branches showing through the blossom
+        ctx.strokeStyle = 'rgba(70,40,40,0.75)'; ctx.lineWidth = 2; ctx.lineCap = 'round';
+        ctx.beginPath();
+        for (const [bx, by] of [[-22, -14], [20, -18], [-6, -30], [10, 4], [-26, 4]]) { ctx.moveTo(cx + sway * 0.4, cy + 10); ctx.quadraticCurveTo(cx + bx * 0.5 + sway * 0.6, cy + by * 0.3, cx + bx + sway, cy + by); }
+        ctx.stroke();
+      }
     }
+    if (p.variant === 'cherry') this.drawBlossoms(ctx, p, cx, cy, sway, t);
+  }
+  // cherry blossom: little five-petal flowers scattered over the canopy (pale, with a pink heart)
+  drawBlossoms(ctx, p, cx, cy, sway, t) {
+    if (!p.flowers) { // place them once per tree
+      const f = []; let s = (p.seed || 1) * 9301 + 49297;
+      const rnd = () => { s = (s * 9301 + 49297) % 233280; return s / 233280; };
+      for (const bl of p.blobs) { if (bl[3] === 3 && bl[2] < 10) continue; const n = Math.round(bl[2] / 5); for (let i = 0; i < n; i++) { const a = rnd() * TAU, d = rnd() * bl[2] * 0.85; f.push([bl[0] + Math.cos(a) * d, bl[1] + Math.sin(a) * d * 0.85, bl, 1.3 + rnd() * 0.9, rnd() < 0.3]); } }
+      p.flowers = f;
+    }
+    const petals = new Path2D(), pale = new Path2D(), hearts = new Path2D();
+    for (const [fx, fy, bl, s, deep] of p.flowers) {
+      const s3 = sway * (1 + bl[1] * -0.02) + Math.sin(t * 2 + bl[0]) * 0.8;
+      const x = cx + fx + s3 - bl[3] * 0.8, y = cy + fy - bl[3] * 1.2;
+      const P2 = deep ? petals : pale;
+      for (let k = 0; k < 5; k++) { const a = (k / 5) * TAU - Math.PI / 2, px = x + Math.cos(a) * s, py = y + Math.sin(a) * s; P2.moveTo(px + s * 0.75, py); P2.arc(px, py, s * 0.75, 0, TAU); }
+      hearts.moveTo(x + s * 0.45, y); hearts.arc(x, y, s * 0.45, 0, TAU);
+    }
+    ctx.fillStyle = '#fff3f6'; ctx.fill(pale);
+    ctx.fillStyle = '#ffd0de'; ctx.fill(petals);
+    ctx.fillStyle = '#d8506e'; ctx.fill(hearts);
   }
 
   drawBush(ctx, p, t) {
@@ -1029,22 +1336,39 @@ export class World {
     }
   }
 
+  // a square stone block in iso view: half-size a (tiles), from height z0 up by h (px); lit from the upper left
+  isoBlock(ctx, sx, sy, a, z0, h, col) {
+    const X = a * 32, Y = a * 16, b = sy - z0;
+    const L = [sx - X, b], F = [sx, b + Y], R = [sx + X, b], Bk = [sx, b - Y];
+    const quad = (pts, fill) => { ctx.beginPath(); pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.closePath(); ctx.fillStyle = fill; ctx.fill(); ctx.stroke(); };
+    quad([L, F, [F[0], F[1] - h], [L[0], L[1] - h]], shade(col, -0.08));
+    quad([F, R, [R[0], R[1] - h], [F[0], F[1] - h]], shade(col, -0.22));
+    quad([[L[0], L[1] - h], [F[0], F[1] - h], [R[0], R[1] - h], [Bk[0], Bk[1] - h]], shade(col, 0.1));
+  }
+  // stone lantern (tōrō): base, post, platform, a lit firebox with windows on both visible sides, a hipped roof and a jewel
   drawLantern(ctx, p, t) {
     const [sx, sy] = P(p.x, p.y);
     const stone = this.bi === 2 ? '#8a8e9c' : '#9c978a';
-    ctx.fillStyle = 'rgba(20,25,35,0.22)'; ctx.beginPath(); ctx.ellipse(sx, sy, 14, 6, 0, 0, TAU); ctx.fill();
-    ctx.strokeStyle = INK; ctx.lineWidth = 1.4;
-    ctx.fillStyle = shade(stone, -0.1); ctx.fillRect(sx - 9, sy - 5, 18, 5); ctx.strokeRect(sx - 9, sy - 5, 18, 5);
-    ctx.fillStyle = stone; ctx.fillRect(sx - 3.5, sy - 22, 7, 17); ctx.strokeRect(sx - 3.5, sy - 22, 7, 17);
-    ctx.fillRect(sx - 9, sy - 26, 18, 4); ctx.strokeRect(sx - 9, sy - 26, 18, 4);
+    ctx.fillStyle = 'rgba(20,25,35,0.24)'; ctx.beginPath(); ctx.ellipse(sx + 4, sy + 1, 17, 7, 0, 0, TAU); ctx.fill();
+    ctx.strokeStyle = INK; ctx.lineWidth = 1.2; ctx.lineJoin = 'round';
+    this.isoBlock(ctx, sx, sy, 0.3, 0, 5, shade(stone, -0.06));   // base
+    this.isoBlock(ctx, sx, sy, 0.21, 5, 3, stone);                 // step
+    this.isoBlock(ctx, sx, sy, 0.085, 8, 15, stone);               // post
+    this.isoBlock(ctx, sx, sy, 0.23, 23, 4, stone);                // platform
+    this.isoBlock(ctx, sx, sy, 0.16, 27, 11, stone);               // firebox
     const fl = 0.75 + Math.sin(t * 11 + p.seed) * 0.12 + Math.sin(t * 27 + p.seed) * 0.08;
-    ctx.fillStyle = this.biome.night || this.bi === 1 ? `rgba(255,200,110,${fl})` : '#d8cfb8'; ctx.fillRect(sx - 6, sy - 36, 12, 10);
-    ctx.strokeRect(sx - 6, sy - 36, 12, 10);
-    ctx.fillStyle = INK; ctx.fillRect(sx - 1, sy - 36, 2, 10);
-    ctx.beginPath(); ctx.moveTo(sx - 13, sy - 36); ctx.quadraticCurveTo(sx, sy - 44, sx + 13, sy - 36); ctx.lineTo(sx, sy - 47); ctx.closePath();
-    ctx.fillStyle = shade(stone, -0.05); ctx.fill(); ctx.stroke();
-    ctx.beginPath(); ctx.arc(sx, sy - 48, 2.5, 0, TAU); ctx.fill(); ctx.stroke();
-    if (this.bi === 2) { ctx.fillStyle = 'rgba(245,248,255,0.95)'; ctx.beginPath(); ctx.ellipse(sx, sy - 42, 9, 3, 0, 0, TAU); ctx.fill(); }
+    const lit = this.biome.night || this.bi === 1 ? `rgba(255,200,110,${fl})` : 'rgba(60,46,36,0.85)';
+    const X = 0.16 * 32, Y = 0.16 * 16, b = sy - 27;
+    ctx.fillStyle = lit; // a window in each visible face
+    ctx.beginPath(); ctx.moveTo(sx - X * 0.65, b + Y * 0.35 - 2); ctx.lineTo(sx - X * 0.2, b + Y * 0.8 - 2); ctx.lineTo(sx - X * 0.2, b + Y * 0.8 - 9); ctx.lineTo(sx - X * 0.65, b + Y * 0.35 - 9); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(sx + X * 0.2, b + Y * 0.8 - 2); ctx.lineTo(sx + X * 0.65, b + Y * 0.35 - 2); ctx.lineTo(sx + X * 0.65, b + Y * 0.35 - 9); ctx.lineTo(sx + X * 0.2, b + Y * 0.8 - 9); ctx.closePath(); ctx.fill();
+    // hipped roof: two visible slopes rising to a point, with upturned eaves
+    const rX = 0.34 * 32, rY = 0.34 * 16, rb = sy - 38, peak = [sx, rb - 13];
+    const L = [sx - rX, rb], F = [sx, rb + rY], R = [sx + rX, rb];
+    ctx.beginPath(); ctx.moveTo(L[0] - 2, L[1] - 2); ctx.lineTo(F[0], F[1]); ctx.lineTo(peak[0], peak[1]); ctx.closePath(); ctx.fillStyle = shade(stone, -0.02); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(F[0], F[1]); ctx.lineTo(R[0] + 2, R[1] - 2); ctx.lineTo(peak[0], peak[1]); ctx.closePath(); ctx.fillStyle = shade(stone, -0.2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = shade(stone, -0.05); ctx.beginPath(); ctx.arc(peak[0], peak[1] - 2, 3, 0, TAU); ctx.fill(); ctx.stroke(); // hōju jewel
+    if (this.bi === 2) { ctx.fillStyle = 'rgba(245,248,255,0.95)'; ctx.beginPath(); ctx.moveTo(L[0] + 3, L[1] - 3); ctx.lineTo(peak[0], peak[1] + 1); ctx.lineTo(R[0] - 3, R[1] - 3); ctx.quadraticCurveTo(sx, rb - 2, L[0] + 3, L[1] - 3); ctx.fill(); }
   }
 
   drawRock(ctx, p) {
@@ -1124,7 +1448,12 @@ export class World {
     ctx.fillStyle = '#8f8a80'; ctx.beginPath(); ctx.ellipse(sx, sy - 4, 18, 8, 0, 0, Math.PI); ctx.lineTo(sx - 18, sy - 14); ctx.ellipse(sx, sy - 14, 18, 8, 0, Math.PI, 0, true); ctx.closePath(); ctx.fill(); ctx.stroke();
     ctx.fillStyle = '#2a3440'; ctx.beginPath(); ctx.ellipse(sx, sy - 14, 14, 6, 0, 0, TAU); ctx.fill(); ctx.stroke();
     ctx.strokeStyle = INK; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(sx - 16, sy - 12); ctx.lineTo(sx - 16, sy - 46); ctx.moveTo(sx + 16, sy - 12); ctx.lineTo(sx + 16, sy - 46); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(sx - 24, sy - 42); ctx.lineTo(sx, sy - 56); ctx.lineTo(sx + 24, sy - 42); ctx.closePath(); ctx.fillStyle = '#5a4030'; ctx.fill(); ctx.lineWidth = 1.5; ctx.stroke();
+    // gable roof: the ridge runs between the posts; the front slope faces us, the back slope peeks over it
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(sx - 22, sy - 54); ctx.lineTo(sx + 22, sy - 54); ctx.lineTo(sx + 26, sy - 60); ctx.lineTo(sx - 18, sy - 60); ctx.closePath(); ctx.fillStyle = '#4a3226'; ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(sx - 22, sy - 54); ctx.lineTo(sx + 22, sy - 54); ctx.lineTo(sx + 28, sy - 40); ctx.lineTo(sx - 28, sy - 40); ctx.closePath(); ctx.fillStyle = '#6a4a34'; ctx.fill(); ctx.stroke();
+    ctx.strokeStyle = 'rgba(30,20,14,0.45)'; ctx.lineWidth = 1; for (let k = -2; k <= 2; k++) { ctx.beginPath(); ctx.moveTo(sx + k * 9, sy - 54); ctx.lineTo(sx + k * 11, sy - 40); ctx.stroke(); }
+    ctx.strokeStyle = INK; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(sx - 23, sy - 54.5); ctx.lineTo(sx + 23, sy - 54.5); ctx.stroke(); // ridge beam
   }
 
   // ---- fortress / hall props
@@ -1156,6 +1485,7 @@ export class World {
   }
 
   drawPillar(ctx, p) {
+    if (p.style === 'dojo') return this.drawDojoPillar(ctx, p);
     const [sx, sy] = P(p.x, p.y), Hh = 4.2 * 32, w = 11;
     ctx.fillStyle = 'rgba(20,6,6,0.35)'; ctx.beginPath(); ctx.ellipse(sx + 6, sy + 2, 18, 7, 0, 0, TAU); ctx.fill();
     ctx.fillStyle = '#1a1214'; ctx.fillRect(sx - w - 3, sy - 10, (w + 3) * 2, 10); ctx.strokeStyle = INK; ctx.lineWidth = 1.4; ctx.strokeRect(sx - w - 3, sy - 10, (w + 3) * 2, 10);
@@ -1187,6 +1517,7 @@ export class World {
 
   // a gold folding-screen panel on a back wall
   drawScreen(ctx, p, t) {
+    if (p.style === 'dojo') return this.drawDojoScreen(ctx, p);
     const H = 2.7, [a0, a1] = p.axis === 'x' ? [[p.x - 0.5, p.y], [p.x + 0.5, p.y]] : [[p.x, p.y - 0.5], [p.x, p.y + 0.5]];
     const q = [P(a0[0], a0[1]), P(a1[0], a1[1]), P(a1[0], a1[1], H), P(a0[0], a0[1], H)];
     const g = ctx.createLinearGradient(q[3][0], q[3][1], q[1][0], q[1][1]);
@@ -1204,6 +1535,7 @@ export class World {
 
   // a red-lacquered sliding door in the back wall; slides open when a guard steps out
   drawHallDoor(ctx, p, t) {
+    if (p.style === 'dojo') return this.drawDojoDoor(ctx, p);
     const H = 2.7, [a0, a1] = p.axis === 'x' ? [[p.x - 0.5, p.y], [p.x + 0.5, p.y]] : [[p.x, p.y - 0.5], [p.x, p.y + 0.5]];
     const dT = p.doorT || 0;
     const open = dT <= 0 ? 0 : dT > 1.3 ? (1.6 - dT) / 0.3 : dT < 0.35 ? dT / 0.35 : 1;
@@ -1219,8 +1551,445 @@ export class World {
     if (open > 0) { const [gx, gy] = m(0.5, 1); const gl = ctx.createRadialGradient(gx, gy, 0, gx, gy, 40); gl.addColorStop(0, `rgba(255,120,60,${0.35 * open})`); gl.addColorStop(1, 'rgba(255,120,60,0)'); ctx.fillStyle = gl; ctx.beginPath(); ctx.arc(gx, gy, 40, 0, TAU); ctx.fill(); }
   }
 
+  // ---------- special arena props ----------
+  // a hip roof over (ex0..ex1, ey0..ey1): eaves at height z, ridge at rz along the long side; eaves turn up at the corners
+  hipRoof(ctx, ex0, ey0, ex1, ey1, z, rz, col, snow = false) {
+    const along = ex1 - ex0 >= ey1 - ey0, mx = (ex0 + ex1) / 2, my = (ey0 + ey1) / 2;
+    const inset = Math.min(ex1 - ex0, ey1 - ey0) / 2;
+    const rA = along ? [ex0 + inset, my] : [mx, ey0 + inset], rB = along ? [ex1 - inset, my] : [mx, ey1 - inset];
+    const c00 = P(ex0, ey0, z), c10 = P(ex1, ey0, z), c01 = P(ex0, ey1, z), c11 = P(ex1, ey1, z), A = P(rA[0], rA[1], rz), B = P(rB[0], rB[1], rz);
+    const faces = along
+      ? { back: [c00, c10, B, A], left: [c00, c01, A], right: [c10, c11, B], front: [c01, c11, B, A] }
+      : { back: [c00, c10, A], left: [c00, c01, B, A], right: [c10, c11, B, A], front: [c01, c11, B] };
+    poly(ctx, faces.back, shade(col, -0.35), INK, 1.4);
+    poly(ctx, faces.left, shade(col, -0.3), INK, 1.4);
+    poly(ctx, faces.right, shade(col, -0.16), INK, 1.6);
+    poly(ctx, faces.front, col, INK, 1.8);
+    // tile rows on the two faces we look at
+    ctx.strokeStyle = 'rgba(10,10,20,0.3)'; ctx.lineWidth = 1.2;
+    for (const f of [faces.front, faces.right]) {
+      const e0 = f[0], e1 = f[1], t0 = f.length === 4 ? f[3] : f[2], t1 = f[2];
+      for (let k = 1; k < 6; k++) { const u = k / 6; ctx.beginPath(); ctx.moveTo(lerp(e0[0], t0[0], u), lerp(e0[1], t0[1], u)); ctx.lineTo(lerp(e1[0], t1[0], u), lerp(e1[1], t1[1], u)); ctx.stroke(); }
+    }
+    if (snow) { // snow over the upper part of the slopes
+      ctx.fillStyle = 'rgba(240,245,255,0.92)';
+      for (const f of [faces.front, faces.right]) {
+        const top = f.length === 4 ? [f[3], f[2]] : [f[2], f[2]], lo = (q, a) => [lerp(top[q][0], f[q][0], a), lerp(top[q][1], f[q][1], a)];
+        ctx.beginPath(); ctx.moveTo(top[0][0], top[0][1]); ctx.lineTo(top[1][0], top[1][1]); const b1 = lo(1, 0.4), b0 = lo(0, 0.4); ctx.lineTo(b1[0], b1[1]); ctx.lineTo(b0[0], b0[1]); ctx.closePath(); ctx.fill();
+      }
+    }
+    // upturned eave tips and the ridge cap
+    ctx.strokeStyle = INK; ctx.lineWidth = 3; ctx.lineCap = 'round';
+    for (const [c, dx] of [[c01, -1], [c11, 0], [c10, 1]]) { ctx.beginPath(); ctx.moveTo(c[0] - dx * 10, c[1] + 3); ctx.quadraticCurveTo(c[0] + dx * 2, c[1] + 2, c[0] + dx * 7, c[1] - 9); ctx.stroke(); }
+    ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(A[0], A[1] - 1); ctx.lineTo(B[0], B[1] - 1); ctx.stroke();
+    for (const e of [A, B]) { ctx.fillStyle = INK; ctx.beginPath(); ctx.ellipse(e[0], e[1] - 5, 4, 6, 0, 0, TAU); ctx.fill(); }
+    return { A, B };
+  }
+
+  // the temple hall: stone platform, white walls between vermilion pillars, lattice doors, a two-tier roof
+  drawTemple(ctx, p, t) {
+    const { x0, y0, x1, y1 } = p, b = this.bi, mx = (x0 + x1) / 2;
+    const plat = 0.32, ins = 0.45, wx0 = x0 + ins, wy0 = y0 + ins, wx1 = x1 - ins, wy1 = y1 - ins, Hw = plat + 1.5;
+    const line = (a, c) => { ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(c[0], c[1]); ctx.stroke(); };
+    ctx.fillStyle = 'rgba(20,20,40,0.22)'; poly(ctx, [P(x0 - 0.4, y0), P(x1 + 1.4, y0), P(x1 + 1.6, y1 + 0.8), P(x0, y1 + 0.6)], ctx.fillStyle, null);
+    // the stone platform
+    const stone = b === 2 ? '#a8adb9' : b === 3 ? '#77727c' : '#a89f92';
+    poly(ctx, [P(x0, y0, plat), P(x1, y0, plat), P(x1, y1, plat), P(x0, y1, plat)], shade(stone, 0.12), INK, 1.4);
+    poly(ctx, [P(x0, y1), P(x1, y1), P(x1, y1, plat), P(x0, y1, plat)], stone, INK, 1.4);
+    poly(ctx, [P(x1, y1), P(x1, y0), P(x1, y0, plat), P(x1, y1, plat)], shade(stone, -0.2), INK, 1.4);
+    ctx.strokeStyle = 'rgba(40,36,40,0.35)'; ctx.lineWidth = 1;
+    for (let x = x0 + 1; x < x1; x += 1) line(P(x, y1), P(x, y1, plat));
+    for (let y = y0 + 1; y < y1; y += 1) line(P(x1, y), P(x1, y, plat));
+    // walls
+    const plaster = b === 3 ? '#d8d2c6' : '#f0e8d6', red = b === 3 ? '#6a1420' : '#b3392a', wood = '#3a2218';
+    poly(ctx, [P(wx0, wy1, plat), P(wx1, wy1, plat), P(wx1, wy1, Hw), P(wx0, wy1, Hw)], plaster, INK, 1.6);
+    poly(ctx, [P(wx1, wy1, plat), P(wx1, wy0, plat), P(wx1, wy0, Hw), P(wx1, wy1, Hw)], shade(plaster, -0.16), INK, 1.6);
+    // lattice windows on the side wall
+    for (const f of [0.28, 0.72]) {
+      const yy = lerp(wy1, wy0, f);
+      poly(ctx, [P(wx1, yy + 0.45, plat + 0.55), P(wx1, yy - 0.45, plat + 0.55), P(wx1, yy - 0.45, plat + 1.15), P(wx1, yy + 0.45, plat + 1.15)], '#4a3020', INK, 1.2);
+      ctx.strokeStyle = 'rgba(240,220,170,0.6)'; ctx.lineWidth = 1;
+      for (let k = 1; k < 4; k++) line(P(wx1, yy + 0.45 - k * 0.225, plat + 0.55), P(wx1, yy + 0.45 - k * 0.225, plat + 1.15));
+      for (let k = 1; k < 3; k++) line(P(wx1, yy + 0.45, plat + 0.55 + k * 0.2), P(wx1, yy - 0.45, plat + 0.55 + k * 0.2));
+    }
+    // the lattice doors (slide open when the monk steps out)
+    const dT = p.doorT || 0, open = dT <= 0 ? 0 : dT > 1.9 ? (2.2 - dT) / 0.3 : dT < 0.4 ? dT / 0.4 : 1;
+    poly(ctx, [P(mx - 0.9, wy1, plat), P(mx + 0.9, wy1, plat), P(mx + 0.9, wy1, plat + 1.25), P(mx - 0.9, wy1, plat + 1.25)], open > 0 ? '#1a0e08' : '#4a2a18', INK, 1.4);
+    if (open > 0) { const [gx, gy] = P(mx, wy1, plat + 0.6); const gl = ctx.createRadialGradient(gx, gy, 0, gx, gy, 46); gl.addColorStop(0, `rgba(255,200,120,${0.5 * open})`); gl.addColorStop(1, 'rgba(255,200,120,0)'); ctx.fillStyle = gl; ctx.beginPath(); ctx.arc(gx, gy, 46, 0, TAU); ctx.fill(); }
+    for (const side of [-1, 1]) {
+      const off = side * open * 0.85, a0 = side < 0 ? mx - 0.9 : mx, a1 = side < 0 ? mx : mx + 0.9;
+      const q = [P(a0 + off, wy1, plat), P(a1 + off, wy1, plat), P(a1 + off, wy1, plat + 1.25), P(a0 + off, wy1, plat + 1.25)];
+      poly(ctx, q, '#6a3a22', INK, 1.4);
+      ctx.strokeStyle = 'rgba(240,210,150,0.55)'; ctx.lineWidth = 1;
+      for (let k = 1; k < 5; k++) line(P(lerp(a0, a1, k / 5) + off, wy1, plat + 0.1), P(lerp(a0, a1, k / 5) + off, wy1, plat + 1.15));
+      for (let k = 1; k < 6; k++) line(P(a0 + off, wy1, plat + k * 0.2), P(a1 + off, wy1, plat + k * 0.2));
+    }
+    // vermilion pillars and beams
+    ctx.strokeStyle = red; ctx.lineWidth = 5;
+    for (let x = wx0; x <= wx1 + 0.01; x += (wx1 - wx0) / 4) line(P(x, wy1, plat), P(x, wy1, Hw));
+    for (let y = wy0; y <= wy1 + 0.01; y += (wy1 - wy0) / 3) line(P(wx1, y, plat), P(wx1, y, Hw));
+    ctx.lineWidth = 4; line(P(wx0, wy1, Hw - 0.08), P(wx1, wy1, Hw - 0.08)); line(P(wx1, wy1, Hw - 0.08), P(wx1, wy0, Hw - 0.08));
+    ctx.strokeStyle = wood; ctx.lineWidth = 2; line(P(wx0, wy1, plat + 0.08), P(wx1, wy1, plat + 0.08)); line(P(wx1, wy1, plat + 0.08), P(wx1, wy0, plat + 0.08));
+    // lower roof skirt, upper body, upper roof
+    const roof = b === 3 ? '#26242e' : b === 2 ? '#3d455c' : b === 1 ? '#4a3c3a' : '#3c4252', snow = b === 2;
+    const o = 0.75, He = Hw, ux0 = wx0 + 1.1, uy0 = wy0 + 0.9, ux1 = wx1 - 1.1, uy1 = wy1 - 0.9, Hs = He + 0.7;
+    poly(ctx, [P(wx1 + o, wy1 + o, He), P(wx1 + o, wy0 - o, He), P(ux1, uy0, Hs), P(ux1, uy1, Hs)], shade(roof, -0.16), INK, 1.6);
+    poly(ctx, [P(wx0 - o, wy1 + o, He), P(wx1 + o, wy1 + o, He), P(ux1, uy1, Hs), P(ux0, uy1, Hs)], roof, INK, 1.8);
+    ctx.strokeStyle = 'rgba(10,10,20,0.3)'; ctx.lineWidth = 1.2;
+    for (let k = 1; k < 4; k++) { const u = k / 4; line(P(lerp(wx0 - o, ux0, u), lerp(wy1 + o, uy1, u), lerp(He, Hs, u)), P(lerp(wx1 + o, ux1, u), lerp(wy1 + o, uy1, u), lerp(He, Hs, u))); }
+    if (snow) { ctx.fillStyle = 'rgba(240,245,255,0.85)'; poly(ctx, [P(lerp(wx0 - o, ux0, 0.5), lerp(wy1 + o, uy1, 0.5), lerp(He, Hs, 0.5)), P(lerp(wx1 + o, ux1, 0.5), lerp(wy1 + o, uy1, 0.5), lerp(He, Hs, 0.5)), P(ux1, uy1, Hs), P(ux0, uy1, Hs)], ctx.fillStyle, null); }
+    ctx.strokeStyle = INK; ctx.lineWidth = 3; ctx.lineCap = 'round';
+    for (const [c, dx] of [[P(wx0 - o, wy1 + o, He), -1], [P(wx1 + o, wy1 + o, He), 0], [P(wx1 + o, wy0 - o, He), 1]]) { ctx.beginPath(); ctx.moveTo(c[0] - dx * 10, c[1] + 3); ctx.quadraticCurveTo(c[0] + dx * 2, c[1] + 2, c[0] + dx * 7, c[1] - 9); ctx.stroke(); }
+    const Hu = Hs + 0.75;
+    poly(ctx, [P(ux0, uy1, Hs), P(ux1, uy1, Hs), P(ux1, uy1, Hu), P(ux0, uy1, Hu)], plaster, INK, 1.4);
+    poly(ctx, [P(ux1, uy1, Hs), P(ux1, uy0, Hs), P(ux1, uy0, Hu), P(ux1, uy1, Hu)], shade(plaster, -0.16), INK, 1.4);
+    ctx.strokeStyle = red; ctx.lineWidth = 4;
+    for (let x = ux0; x <= ux1 + 0.01; x += (ux1 - ux0) / 2) line(P(x, uy1, Hs), P(x, uy1, Hu));
+    for (let y = uy0; y <= uy1 + 0.01; y += (uy1 - uy0) / 2) line(P(ux1, y, Hs), P(ux1, y, Hu));
+    const { A } = this.hipRoof(ctx, ux0 - 0.8, uy0 - 0.8, ux1 + 0.8, uy1 + 0.8, Hu, Hu + 1.25, roof, snow);
+    // gold finial on the ridge, and the name plaque under the upper eave
+    ctx.fillStyle = '#d8a838'; ctx.strokeStyle = INK; ctx.lineWidth = 1.2;
+    const fx = (ux0 + ux1) / 2, fy = (uy0 + uy1) / 2, [px, py] = P(fx, fy, Hu + 1.25);
+    ctx.beginPath(); ctx.moveTo(px - 4, py); ctx.lineTo(px, py - 16); ctx.lineTo(px + 4, py); ctx.closePath(); ctx.fill(); ctx.stroke();
+    void A;
+    const [qx, qy] = P(mx, uy1, Hs + 0.38);
+    ctx.fillStyle = '#2a1810'; ctx.fillRect(qx - 11, qy - 15, 22, 28); ctx.strokeStyle = '#d8a838'; ctx.lineWidth = 1.5; ctx.strokeRect(qx - 11, qy - 15, 22, 28);
+    ctx.fillStyle = '#e8c060'; ctx.font = '800 16px "Shippori Mincho", serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('寺', qx, qy);
+  }
+
+  // the imbuement shrine: stone platform, a red-pillared hokora with a curved roof, rope and paper streamers,
+  // an offering box; when the fight is over, coloured element lights circle it and a marker bobs over the kneeling spot
+  drawShrine(ctx, p, t) {
+    const { x0, y0, x1, y1 } = p, S = this.shrine, b = this.bi, cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+    const line = (a, c) => { ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(c[0], c[1]); ctx.stroke(); };
+    ctx.fillStyle = 'rgba(20,20,40,0.22)'; poly(ctx, [P(x0 - 0.2, y0), P(x1 + 0.7, y0), P(x1 + 0.9, y1 + 0.5), P(x0, y1 + 0.4)], ctx.fillStyle, null);
+    const stone = b === 2 ? '#a8adb9' : b === 3 ? '#77727c' : '#a39a8e', ph = 0.4;
+    poly(ctx, [P(x0, y0, ph), P(x1, y0, ph), P(x1, y1, ph), P(x0, y1, ph)], shade(stone, 0.12), INK, 1.3);
+    poly(ctx, [P(x0, y1), P(x1, y1), P(x1, y1, ph), P(x0, y1, ph)], stone, INK, 1.3);
+    poly(ctx, [P(x1, y1), P(x1, y0), P(x1, y0, ph), P(x1, y1, ph)], shade(stone, -0.2), INK, 1.3);
+    // the hokora body
+    const bx0 = cx - 0.6, bx1 = cx + 0.6, by0 = cy - 0.55, by1 = cy + 0.55, H = ph + 1.05, wood = '#6a3a22', red = b === 3 ? '#6a1420' : '#b3392a';
+    poly(ctx, [P(bx0, by1, ph), P(bx1, by1, ph), P(bx1, by1, H), P(bx0, by1, H)], '#7a4a2c', INK, 1.4);
+    poly(ctx, [P(bx1, by1, ph), P(bx1, by0, ph), P(bx1, by0, H), P(bx1, by1, H)], shade('#7a4a2c', -0.2), INK, 1.4);
+    ctx.strokeStyle = red; ctx.lineWidth = 4; line(P(bx0, by1, ph), P(bx0, by1, H)); line(P(bx1, by1, ph), P(bx1, by1, H)); line(P(bx1, by0, ph), P(bx1, by0, H));
+    // doors with a little mirror glinting inside
+    poly(ctx, [P(cx - 0.32, by1, ph + 0.1), P(cx + 0.32, by1, ph + 0.1), P(cx + 0.32, by1, ph + 0.8), P(cx - 0.32, by1, ph + 0.8)], '#2a1810', INK, 1.1);
+    const [mx, my] = P(cx, by1, ph + 0.48); ctx.fillStyle = S && S.ready ? '#fff4c8' : '#c8b480'; ctx.beginPath(); ctx.arc(mx, my, 4.5, 0, TAU); ctx.fill();
+    // a curved gable roof
+    const rf = b === 3 ? '#26242e' : b === 2 ? '#3d455c' : '#4a3c3a', Hr = H + 0.75, o = 0.35;
+    poly(ctx, [P(bx0 - o, by1 + o, H), P(bx1 + o, by1 + o, H), P(bx1 + o, cy, Hr), P(bx0 - o, cy, Hr)], rf, INK, 1.6);
+    poly(ctx, [P(bx1 + o, by1 + o, H), P(bx1 + o, by0 - o, H), P(bx1 + o, cy, Hr)], shade(rf, -0.2), INK, 1.4);
+    if (b === 2) { ctx.fillStyle = 'rgba(240,245,255,0.85)'; poly(ctx, [P(bx0 - o, cy + 0.4, lerp(Hr, H, 0.45)), P(bx1 + o, cy + 0.4, lerp(Hr, H, 0.45)), P(bx1 + o, cy, Hr), P(bx0 - o, cy, Hr)], ctx.fillStyle, null); }
+    ctx.strokeStyle = INK; ctx.lineWidth = 4; line(P(bx0 - o, cy, Hr + 0.03), P(bx1 + o, cy, Hr + 0.03));
+    for (const e of [P(bx0 - o, cy, Hr), P(bx1 + o, cy, Hr)]) { ctx.lineWidth = 2.4; line([e[0] - 6, e[1] - 10], [e[0] + 4, e[1] + 2]); line([e[0] + 6, e[1] - 10], [e[0] - 4, e[1] + 2]); } // chigi
+    // the shimenawa rope with paper streamers across the front
+    const r0 = P(bx0 - 0.1, by1 + 0.05, H - 0.08), r1 = P(bx1 + 0.1, by1 + 0.05, H - 0.08);
+    ctx.strokeStyle = '#c8a868'; ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(r0[0], r0[1]); ctx.quadraticCurveTo((r0[0] + r1[0]) / 2, (r0[1] + r1[1]) / 2 + 9, r1[0], r1[1]); ctx.stroke();
+    ctx.strokeStyle = '#f4efe4'; ctx.lineWidth = 2; for (const f of [0.3, 0.7]) { const sx = lerp(r0[0], r1[0], f), sy = lerp(r0[1], r1[1], f) + 6; ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(sx + 3, sy + 4); ctx.lineTo(sx - 2, sy + 8); ctx.lineTo(sx + 3, sy + 12); ctx.stroke(); }
+    // the offering box in front
+    const ob = [cx - 0.35, by1 + 0.15, cx + 0.35, by1 + 0.5];
+    poly(ctx, [P(ob[0], ob[3], ph), P(ob[2], ob[3], ph), P(ob[2], ob[3], ph + 0.32), P(ob[0], ob[3], ph + 0.32)], '#5a3420', INK, 1.1);
+    poly(ctx, [P(ob[0], ob[1], ph + 0.32), P(ob[2], ob[1], ph + 0.32), P(ob[2], ob[3], ph + 0.32), P(ob[0], ob[3], ph + 0.32)], '#7a4a2a', INK, 1.1);
+    ctx.fillStyle = '#d8a838'; const [kx, ky] = P(cx, ob[3], ph + 0.18); ctx.font = '800 10px "Shippori Mincho", serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('宿', kx, ky);
+    // once the level is clear: element lights circling, and a marker over the kneeling spot
+    if (S && S.ready && !S.taken) {
+      const cols = ['255,120,60', '120,200,255', '255,236,110', '140,230,110', '200,160,255'];
+      ctx.save(); ctx.globalCompositeOperation = 'lighter';
+      cols.forEach((c, i) => {
+        const a = t * 1.4 + (i / cols.length) * TAU, [ox, oy] = P(cx + Math.cos(a) * 1.4, cy + Math.sin(a) * 1.4, H + 0.4 + Math.sin(t * 2 + i) * 0.15);
+        const gg = ctx.createRadialGradient(ox, oy, 0, ox, oy, 14); gg.addColorStop(0, `rgba(${c},0.9)`); gg.addColorStop(1, `rgba(${c},0)`);
+        ctx.fillStyle = gg; ctx.beginPath(); ctx.arc(ox, oy, 14, 0, TAU); ctx.fill();
+      });
+      ctx.restore();
+      const [dx, dy] = P(S.desk.x, S.desk.y, 1.6 + Math.sin(t * 3) * 0.12);
+      ctx.fillStyle = '#ffd86a'; ctx.strokeStyle = INK; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(dx - 8, dy - 8); ctx.lineTo(dx + 8, dy - 8); ctx.lineTo(dx, dy + 4); ctx.closePath(); ctx.fill(); ctx.stroke();
+    }
+  }
+  // a stone kitsune guardian (fox) sitting on a plinth, facing the path
+  drawKitsuneStatue(ctx, p) {
+    const [sx, sy] = P(p.x, p.y), stone = this.bi === 2 ? '#b8bcc6' : '#8e8a82', d = p.side;
+    ctx.fillStyle = 'rgba(20,20,40,0.22)'; ctx.beginPath(); ctx.ellipse(sx, sy, 14, 6, 0, 0, TAU); ctx.fill();
+    ctx.fillStyle = shade(stone, -0.15); ctx.strokeStyle = INK; ctx.lineWidth = 1.2; ctx.fillRect(sx - 9, sy - 12, 18, 12); ctx.strokeRect(sx - 9, sy - 12, 18, 12);
+    ctx.fillStyle = stone;
+    ctx.beginPath(); ctx.ellipse(sx, sy - 22, 7, 10, 0, 0, TAU); ctx.fill(); ctx.stroke(); // body
+    ctx.beginPath(); ctx.arc(sx + d * 2, sy - 34, 5, 0, TAU); ctx.fill(); ctx.stroke(); // head
+    ctx.beginPath(); ctx.moveTo(sx + d * 2 - 4, sy - 37); ctx.lineTo(sx + d * 2 - 3, sy - 44); ctx.lineTo(sx + d * 2, sy - 38); ctx.moveTo(sx + d * 2 + 1, sy - 38); ctx.lineTo(sx + d * 2 + 4, sy - 44); ctx.lineTo(sx + d * 2 + 5, sy - 36); ctx.fill(); // ears
+    ctx.beginPath(); ctx.moveTo(sx - d * 5, sy - 16); ctx.quadraticCurveTo(sx - d * 14, sy - 24, sx - d * 10, sy - 34); ctx.lineWidth = 4; ctx.strokeStyle = stone; ctx.stroke(); // tail
+    ctx.fillStyle = '#b52a22'; ctx.beginPath(); ctx.moveTo(sx + d * 2 - 5, sy - 29); ctx.lineTo(sx + d * 2 + 5, sy - 29); ctx.lineTo(sx + d * 2, sy - 23); ctx.closePath(); ctx.fill(); // red bib
+  }
+
+  // a bronze incense burner on three legs
+  drawKoro(ctx, p) {
+    const [sx, sy] = P(p.x, p.y);
+    ctx.fillStyle = 'rgba(20,20,30,0.25)'; ctx.beginPath(); ctx.ellipse(sx, sy, 18, 7, 0, 0, TAU); ctx.fill();
+    ctx.strokeStyle = INK; ctx.lineWidth = 3;
+    for (const d of [-9, 0, 9]) { ctx.beginPath(); ctx.moveTo(sx + d, sy + (d ? 0 : 3)); ctx.lineTo(sx + d * 0.8, sy - 12); ctx.stroke(); }
+    const g = ctx.createLinearGradient(sx - 16, 0, sx + 16, 0); g.addColorStop(0, '#3a3a2a'); g.addColorStop(0.4, '#7a7048'); g.addColorStop(1, '#2a2a1e');
+    ctx.fillStyle = g; ctx.lineWidth = 1.6;
+    ctx.beginPath(); ctx.moveTo(sx - 16, sy - 26); ctx.quadraticCurveTo(sx - 17, sy - 8, sx, sy - 9); ctx.quadraticCurveTo(sx + 17, sy - 8, sx + 16, sy - 26); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#5a5238'; ctx.beginPath(); ctx.ellipse(sx, sy - 26, 16, 5, 0, 0, TAU); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = 'rgba(160,150,130,0.9)'; ctx.beginPath(); ctx.ellipse(sx, sy - 26, 12, 3.4, 0, 0, TAU); ctx.fill(); // ash
+    ctx.fillStyle = '#ff8a40'; for (const d of [-4, 1, 5]) ctx.fillRect(sx + d, sy - 33, 1.4, 7); // incense sticks
+  }
+
+  // one tile of the library's back wall: dark wood with shelves full of books and scrolls
+  drawLibWall(ctx, p) {
+    const H = 2.1, [a0, a1] = p.axis === 'x' ? [[p.x - 0.5, p.y], [p.x + 0.5, p.y]] : [[p.x, p.y - 0.5], [p.x, p.y + 0.5]];
+    const m = (f, z) => P(lerp(a0[0], a1[0], f), lerp(a0[1], a1[1], f), z);
+    poly(ctx, [m(0, 0), m(1, 0), m(1, H), m(0, H)], p.axis === 'x' ? '#4a3020' : '#3e281a', INK, 1.4);
+    const cols = ['#8a2a22', '#2e4a6a', '#3e5a2e', '#c8a050', '#5a3a6a', '#d8cbb0', '#6a2a1a'];
+    for (const [z0, z1] of [[0.12, 0.55], [0.62, 1.05], [1.12, 1.55], [1.62, 2.0]]) {
+      let f = 0.06, k = Math.floor(p.seed * 7 + z0 * 13);
+      while (f < 0.94) {
+        const w = 0.06 + ((k * 37) % 5) * 0.012, hh = (z1 - z0) * (0.7 + ((k * 13) % 4) * 0.08);
+        if ((k * 11) % 9 === 0) { // a stack of rolled scrolls lying down
+          for (let s = 0; s < 3; s++) { const [cx, cy] = m(Math.min(0.94, f + 0.05), z0 + 0.06 + s * 0.11); ctx.fillStyle = '#efe4c8'; ctx.beginPath(); ctx.ellipse(cx, cy, 5, 2.6, 0, 0, TAU); ctx.fill(); ctx.strokeStyle = '#6a4a2a'; ctx.lineWidth = 1; ctx.stroke(); }
+          f += 0.16;
+        } else {
+          poly(ctx, [m(f, z0), m(Math.min(0.94, f + w), z0), m(Math.min(0.94, f + w), z0 + hh), m(f, z0 + hh)], cols[k % cols.length], 'rgba(20,10,6,0.6)', 0.8);
+          f += w + 0.008;
+        }
+        k++;
+      }
+      ctx.strokeStyle = '#2a1810'; ctx.lineWidth = 2.5; ctx.beginPath(); const s0 = m(0, z0), s1 = m(1, z0); ctx.moveTo(s0[0], s0[1]); ctx.lineTo(s1[0], s1[1]); ctx.stroke(); // the shelf board
+    }
+    ctx.strokeStyle = '#2a1810'; ctx.lineWidth = 3; const t0 = m(0, H), t1 = m(1, H); ctx.beginPath(); ctx.moveTo(t0[0], t0[1]); ctx.lineTo(t1[0], t1[1]); ctx.stroke();
+  }
+
+  drawLibPillar(ctx, p) {
+    const [sx, sy] = P(p.x, p.y), Hh = 2.1 * 32, w = 6;
+    ctx.fillStyle = 'rgba(20,10,6,0.3)'; ctx.beginPath(); ctx.ellipse(sx + 4, sy + 1, 11, 4, 0, 0, TAU); ctx.fill();
+    ctx.fillStyle = '#8a8478'; ctx.fillRect(sx - w - 2, sy - 6, (w + 2) * 2, 6); ctx.strokeStyle = INK; ctx.lineWidth = 1.2; ctx.strokeRect(sx - w - 2, sy - 6, (w + 2) * 2, 6); // stone footing
+    const g = ctx.createLinearGradient(sx - w, 0, sx + w, 0); g.addColorStop(0, '#3a2414'); g.addColorStop(0.4, '#7a5232'); g.addColorStop(1, '#2a180e');
+    ctx.fillStyle = g; ctx.fillRect(sx - w, sy - Hh, w * 2, Hh - 6); ctx.strokeRect(sx - w, sy - Hh, w * 2, Hh - 6);
+  }
+
+  // a freestanding bookcase
+  drawShelf(ctx, p) {
+    const H = 1.6, hx = p.axis === 'x' ? p.len / 2 : 0.25, hy = p.axis === 'x' ? 0.25 : p.len / 2;
+    const x0 = p.x - hx, x1 = p.x + hx, y0 = p.y - hy, y1 = p.y + hy;
+    ctx.fillStyle = 'rgba(20,10,6,0.25)'; poly(ctx, [P(x0, y1), P(x1, y1), P(x1 + 0.4, y1 + 0.3), P(x0 + 0.3, y1 + 0.35)], ctx.fillStyle, null);
+    poly(ctx, [P(x0, y0, H), P(x1, y0, H), P(x1, y1, H), P(x0, y1, H)], '#5a3a24', INK, 1.3);
+    const face = p.axis === 'x' ? [P(x0, y1), P(x1, y1), P(x1, y1, H), P(x0, y1, H)] : [P(x1, y1), P(x1, y0), P(x1, y0, H), P(x1, y1, H)];
+    const side = p.axis === 'x' ? [P(x1, y1), P(x1, y0), P(x1, y0, H), P(x1, y1, H)] : [P(x0, y1), P(x1, y1), P(x1, y1, H), P(x0, y1, H)];
+    poly(ctx, side, '#3a2416', INK, 1.3);
+    poly(ctx, face, '#4a3020', INK, 1.4);
+    const cols = ['#8a2a22', '#2e4a6a', '#3e5a2e', '#c8a050', '#5a3a6a', '#d8cbb0'];
+    const L = p.axis === 'x' ? (f, z) => P(lerp(x0, x1, f), y1, z) : (f, z) => P(x1, lerp(y1, y0, f), z);
+    let k = Math.floor(p.seed);
+    for (const z0 of [0.1, 0.6, 1.1]) {
+      for (let f = 0.05; f < 0.93; f += 0.075) { const hh = 0.32 + ((k * 7) % 4) * 0.03; poly(ctx, [L(f, z0), L(f + 0.065, z0), L(f + 0.065, z0 + hh), L(f, z0 + hh)], cols[k++ % cols.length], 'rgba(20,10,6,0.6)', 0.8); }
+      ctx.strokeStyle = '#2a1810'; ctx.lineWidth = 2; const a = L(0, z0), c = L(1, z0); ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(c[0], c[1]); ctx.stroke();
+    }
+  }
+
+  // the library desk; the scroll on it glows once the fighting is over, and is gone once taken
+  drawDesk(ctx, p, t) {
+    const Lb = this.library, H = 0.5, x0 = p.x - 0.65, x1 = p.x + 0.65, y0 = p.y - 0.32, y1 = p.y + 0.32;
+    ctx.fillStyle = 'rgba(20,10,6,0.25)'; ctx.beginPath(); ctx.ellipse(...P(p.x + 0.15, p.y + 0.15), 46, 16, 0, 0, TAU); ctx.fill();
+    ctx.strokeStyle = INK; ctx.lineWidth = 3;
+    for (const [lx, ly] of [[x0 + 0.08, y1 - 0.05], [x1 - 0.08, y1 - 0.05], [x1 - 0.08, y0 + 0.05]]) { const a = P(lx, ly), c = P(lx, ly, H); ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(c[0], c[1]); ctx.stroke(); }
+    poly(ctx, [P(x0, y1, H - 0.08), P(x1, y1, H - 0.08), P(x1, y1, H), P(x0, y1, H)], '#3a2010', INK, 1.2);
+    poly(ctx, [P(x1, y1, H - 0.08), P(x1, y0, H - 0.08), P(x1, y0, H), P(x1, y1, H)], '#2a1608', INK, 1.2);
+    poly(ctx, [P(x0, y0, H), P(x1, y0, H), P(x1, y1, H), P(x0, y1, H)], '#6a4024', INK, 1.4);
+    // an inkstone and a brush
+    const [ix, iy] = P(x0 + 0.3, p.y, H); ctx.fillStyle = '#1a1a20'; ctx.fillRect(ix - 7, iy - 4, 14, 7);
+    ctx.strokeStyle = '#c8a878'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(ix + 9, iy - 2); ctx.lineTo(ix + 22, iy - 7); ctx.stroke();
+    if (Lb && !Lb.taken) {
+      const [sx, sy] = P(p.x + 0.2, p.y, H + 0.1);
+      if (Lb.ready) { // glow, and a bobbing marker above
+        const pulse = 0.6 + 0.4 * Math.sin(t * 4);
+        const g = ctx.createRadialGradient(sx, sy, 0, sx, sy, 50); g.addColorStop(0, `rgba(255,220,130,${0.55 * pulse})`); g.addColorStop(1, 'rgba(255,220,130,0)');
+        ctx.fillStyle = g; ctx.beginPath(); ctx.arc(sx, sy, 50, 0, TAU); ctx.fill();
+        const by = sy - 46 + Math.sin(t * 3) * 5;
+        ctx.fillStyle = '#ffd86a'; ctx.strokeStyle = INK; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(sx - 8, by - 8); ctx.lineTo(sx + 8, by - 8); ctx.lineTo(sx, by + 4); ctx.closePath(); ctx.fill(); ctx.stroke();
+      }
+      // the rolled scroll: paper, wooden ends, a red cord
+      ctx.save(); ctx.translate(sx, sy); ctx.rotate(-0.46);
+      ctx.fillStyle = '#f2e6c4'; ctx.strokeStyle = INK; ctx.lineWidth = 1.2; ctx.fillRect(-15, -4, 30, 8); ctx.strokeRect(-15, -4, 30, 8);
+      ctx.fillStyle = '#5a3418'; ctx.fillRect(-18, -5, 3, 10); ctx.fillRect(15, -5, 3, 10);
+      ctx.fillStyle = '#b52a22'; ctx.fillRect(-2, -4.5, 3, 9);
+      ctx.restore();
+    }
+  }
+
+  // the library's roof with its front beams and name board; fades when someone is inside (see Game.draw)
+  drawLibRoof(ctx, p) {
+    const { x0, y0, x1, y1 } = p, H = 2.1, b = this.bi;
+    const line = (a, c) => { ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(c[0], c[1]); ctx.stroke(); };
+    ctx.strokeStyle = '#3a2214'; ctx.lineWidth = 6; line(P(x0, y1, H - 0.1), P(x1, y1, H - 0.1)); line(P(x1, y1, H - 0.1), P(x1, y0, H - 0.1));
+    ctx.strokeStyle = INK; ctx.lineWidth = 1; line(P(x0, y1, H - 0.2), P(x1, y1, H - 0.2));
+    const roof = b === 3 ? '#26242e' : b === 2 ? '#3d455c' : b === 1 ? '#4e3e3a' : '#44485a';
+    this.hipRoof(ctx, x0 - 0.6, y0 - 0.6, x1 + 0.6, y1 + 0.6, H, H + 1.5, roof, b === 2);
+    const [qx, qy] = P((x0 + x1) / 2, y1 + 0.6, H + 0.32);
+    ctx.fillStyle = '#2a1810'; ctx.fillRect(qx - 24, qy - 11, 48, 20); ctx.strokeStyle = '#d8a838'; ctx.lineWidth = 1.5; ctx.strokeRect(qx - 24, qy - 11, 48, 20);
+    ctx.fillStyle = '#f0d070'; ctx.font = '800 14px "Shippori Mincho", serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('書 庫', qx, qy);
+  }
+
+  // training hall: a rack of wooden swords and staffs against the wall
+  drawRack(ctx, p) {
+    const [a0, a1] = p.axis === 'x' ? [[p.x - 0.7, p.y], [p.x + 0.7, p.y]] : [[p.x, p.y - 0.7], [p.x, p.y + 0.7]];
+    const m = (f, z) => P(lerp(a0[0], a1[0], f), lerp(a0[1], a1[1], f), z);
+    ctx.lineCap = 'round';
+    for (let k = 0; k < 6; k++) { // the weapons leaning in the rack
+      const f = 0.12 + k * 0.15, top = k % 3 === 2 ? 1.9 : 1.45, b0 = m(f, 0.05), t0 = m(f + 0.03, top);
+      ctx.strokeStyle = INK; ctx.lineWidth = 4.5; ctx.beginPath(); ctx.moveTo(b0[0], b0[1]); ctx.lineTo(t0[0], t0[1]); ctx.stroke();
+      ctx.strokeStyle = k % 3 === 2 ? '#a07a48' : '#c8a46c'; ctx.lineWidth = 2.6; ctx.stroke();
+      if (k % 3 !== 2) { const g0 = m(f + 0.01, 0.4); ctx.fillStyle = '#2a1810'; ctx.beginPath(); ctx.ellipse(g0[0], g0[1], 4, 1.6, 0, 0, TAU); ctx.fill(); }
+    }
+    ctx.strokeStyle = INK; ctx.lineWidth = 4;
+    for (const f of [0, 1]) { const a = m(f, 0), c = m(f, 1.2); ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(c[0], c[1]); ctx.stroke(); }
+    for (const z of [0.35, 1.1]) { const a = m(0, z), c = m(1, z); ctx.strokeStyle = INK; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(c[0], c[1]); ctx.stroke(); ctx.strokeStyle = '#7a5230'; ctx.lineWidth = 2.4; ctx.stroke(); }
+  }
+
+  // a big taiko drum on its stand
+  drawTaiko(ctx, p) {
+    const [sx, sy] = P(p.x, p.y);
+    ctx.fillStyle = 'rgba(20,10,6,0.3)'; ctx.beginPath(); ctx.ellipse(sx, sy, 30, 11, 0, 0, TAU); ctx.fill();
+    ctx.strokeStyle = INK; ctx.lineWidth = 3; for (const d of [-16, 16]) { ctx.beginPath(); ctx.moveTo(sx + d, sy); ctx.lineTo(sx + d * 0.6, sy - 26); ctx.stroke(); }
+    const cy = sy - 40;
+    const g = ctx.createLinearGradient(sx - 26, 0, sx + 26, 0); g.addColorStop(0, '#5a1a10'); g.addColorStop(0.45, '#a8442a'); g.addColorStop(1, '#4a140c');
+    ctx.fillStyle = g; ctx.lineWidth = 1.8; ctx.beginPath(); ctx.ellipse(sx, cy, 26, 22, 0, 0, TAU); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#efe2c0'; ctx.beginPath(); ctx.ellipse(sx - 9, cy, 12, 20, 0, 0, TAU); ctx.fill(); ctx.stroke(); // the skin
+    ctx.fillStyle = '#b52a22'; ctx.beginPath(); ctx.arc(sx - 9, cy, 5, 0, TAU); ctx.fill(); // tomoe mark
+    ctx.fillStyle = '#d8a838'; for (let k = 0; k < 7; k++) { const a = -1.2 + k * 0.4; ctx.beginPath(); ctx.arc(sx - 9 + Math.cos(a) * 11, cy + Math.sin(a) * 19, 1.4, 0, TAU); ctx.fill(); } // tacks
+  }
+
+  // the training hall's way out: a big wooden door in the back wall that slides open when the level is done
+  drawExitDoor(ctx, p, t) {
+    const H = 2.7, [a0, a1] = [[p.x - 0.5, p.y], [p.x + 0.5, p.y]], gl = this.gate.glow;
+    const m = (f, z) => P(lerp(a0[0], a1[0], f), lerp(a0[1], a1[1], f), z);
+    poly(ctx, [m(0, 0), m(1, 0), m(1, H), m(0, H)], gl > 0.05 ? `rgba(255,${200 + 30 * gl},${130 + 60 * gl},1)` : '#0e0804', '#1a0e06', 2);
+    for (const side of [0, 1]) {
+      const f0 = side ? 0.5 + gl * 0.44 : 0, f1 = side ? 1 : 0.5 - gl * 0.44;
+      if (f1 - f0 < 0.02) continue;
+      poly(ctx, [m(f0, 0.1), m(f1, 0.1), m(f1, 2.25), m(f0, 2.25)], '#7a5634', '#1a0e06', 1.6);
+      ctx.strokeStyle = 'rgba(30,16,6,0.5)'; ctx.lineWidth = 1; for (const z of [0.7, 1.4]) { const a = m(f0, z), c = m(f1, z); ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(c[0], c[1]); ctx.stroke(); }
+    }
+    poly(ctx, [m(0, 2.25), m(1, 2.25), m(1, H), m(0, H)], '#3a2414', '#1a0e06', 1.6);
+    const [qx, qy] = m(0.5, 2.48); ctx.fillStyle = gl > 0.05 ? '#ffe0a0' : '#c8a878'; ctx.font = '800 13px "Shippori Mincho", serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('出口', qx, qy);
+    if (gl > 0.05) { const [gx, gy] = m(0.5, 1); const g = ctx.createRadialGradient(gx, gy, 0, gx, gy, 70); g.addColorStop(0, `rgba(255,220,150,${0.4 * gl})`); g.addColorStop(1, 'rgba(255,220,150,0)'); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(gx, gy, 70, 0, TAU); ctx.fill(); }
+  }
+
+  // training hall walls: shoji panels (white paper in a wooden lattice), a shrine shelf and a hanging scroll
+  drawDojoScreen(ctx, p) {
+    const H = 2.7, [a0, a1] = p.axis === 'x' ? [[p.x - 0.5, p.y], [p.x + 0.5, p.y]] : [[p.x, p.y - 0.5], [p.x, p.y + 0.5]];
+    const m = (f, z) => P(lerp(a0[0], a1[0], f), lerp(a0[1], a1[1], f), z);
+    const line = (a, c) => { ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(c[0], c[1]); ctx.stroke(); };
+    poly(ctx, [m(0, 0), m(1, 0), m(1, H), m(0, H)], p.axis === 'x' ? '#efe6d0' : '#e2d8c0', '#2a1a0e', 2);
+    ctx.strokeStyle = 'rgba(70,46,26,0.75)'; ctx.lineWidth = 1.2;
+    for (const f of [0.25, 0.5, 0.75]) line(m(f, 0.35), m(f, 2.2));
+    for (let z = 0.35; z < 2.2; z += 0.37) line(m(0, z), m(1, z));
+    poly(ctx, [m(0, 0), m(1, 0), m(1, 0.35), m(0, 0.35)], '#5a3a20', null); // wainscot
+    poly(ctx, [m(0, 2.2), m(1, 2.2), m(1, H), m(0, H)], '#4a2e18', null); // lintel band
+    ctx.strokeStyle = '#2a1a0e'; ctx.lineWidth = 3; line(m(0, 0), m(0, H));
+    if (p.deco === 'shrine') { // kamidana: a little shrine on a shelf, with sakaki branches
+      poly(ctx, [m(0.1, 1.7), m(0.9, 1.7), m(0.9, 1.78), m(0.1, 1.78)], '#c8a46c', INK, 1);
+      poly(ctx, [m(0.3, 1.78), m(0.7, 1.78), m(0.7, 2.05), m(0.3, 2.05)], '#d8c09a', INK, 1);
+      const r0 = m(0.22, 2.03), r1 = m(0.78, 2.03), rt = m(0.5, 2.22); ctx.fillStyle = '#3a2a1a'; ctx.beginPath(); ctx.moveTo(r0[0], r0[1]); ctx.lineTo(rt[0], rt[1]); ctx.lineTo(r1[0], r1[1]); ctx.closePath(); ctx.fill();
+      for (const f of [0.15, 0.85]) { const s = m(f, 1.8); ctx.fillStyle = '#3e6a2e'; ctx.beginPath(); ctx.ellipse(s[0], s[1] - 6, 4, 8, 0, 0, TAU); ctx.fill(); }
+      const s = m(0.5, 1.6); ctx.strokeStyle = '#efe6d0'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(s[0] - 12, s[1]); ctx.quadraticCurveTo(s[0], s[1] + 5, s[0] + 12, s[1]); ctx.stroke(); // a rope
+    } else if (p.deco === 'scroll') { // kakejiku: 武 (martial way) in brush ink
+      poly(ctx, [m(0.22, 0.6), m(0.78, 0.6), m(0.78, 2.15), m(0.22, 2.15)], '#f6eedc', INK, 1.2);
+      poly(ctx, [m(0.22, 2.0), m(0.78, 2.0), m(0.78, 2.15), m(0.22, 2.15)], '#6a3a22', null);
+      const c = m(0.5, 1.35); ctx.fillStyle = '#16100c'; ctx.font = '800 26px "Shippori Mincho", serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('武', c[0], c[1]);
+      const sl = m(0.5, 0.82); ctx.fillStyle = '#b52a22'; ctx.fillRect(sl[0] - 3, sl[1] - 3, 6, 6);
+    }
+  }
+  drawDojoDoor(ctx, p) {
+    const H = 2.7, [a0, a1] = p.axis === 'x' ? [[p.x - 0.5, p.y], [p.x + 0.5, p.y]] : [[p.x, p.y - 0.5], [p.x, p.y + 0.5]];
+    const dT = p.doorT || 0, open = dT <= 0 ? 0 : dT > 1.3 ? (1.6 - dT) / 0.3 : dT < 0.35 ? dT / 0.35 : 1;
+    const m = (f, z) => P(lerp(a0[0], a1[0], f), lerp(a0[1], a1[1], f), z);
+    poly(ctx, [m(0, 0), m(1, 0), m(1, H), m(0, H)], '#140a04', '#2a1a0e', 2);
+    for (const side of [0, 1]) {
+      const f0 = side ? 0.5 + open * 0.42 : 0, f1 = side ? 1 : 0.5 - open * 0.42;
+      if (f1 - f0 < 0.02) continue;
+      poly(ctx, [m(f0, 0.12), m(f1, 0.12), m(f1, 2.2), m(f0, 2.2)], '#9a7448', '#2a1a0e', 1.6);
+      ctx.strokeStyle = 'rgba(40,24,10,0.45)'; ctx.lineWidth = 1; for (const z of [0.6, 1.2, 1.8]) { const a = m(f0, z), c = m(f1, z); ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(c[0], c[1]); ctx.stroke(); }
+      ctx.fillStyle = '#2a1a0e'; const [hx, hy] = m(side ? f0 + 0.08 : f1 - 0.08, 1.1); ctx.beginPath(); ctx.arc(hx, hy, 2.2, 0, TAU); ctx.fill();
+    }
+    poly(ctx, [m(0, 2.2), m(1, 2.2), m(1, H), m(0, H)], '#4a2e18', '#2a1a0e', 1.6);
+  }
+  drawDojoPillar(ctx, p) {
+    const [sx, sy] = P(p.x, p.y), Hh = 4.2 * 32, w = 10;
+    ctx.fillStyle = 'rgba(20,10,6,0.3)'; ctx.beginPath(); ctx.ellipse(sx + 6, sy + 2, 17, 6, 0, 0, TAU); ctx.fill();
+    const g = ctx.createLinearGradient(sx - w, 0, sx + w, 0); g.addColorStop(0, '#3a2414'); g.addColorStop(0.4, '#8a6038'); g.addColorStop(1, '#2a180c');
+    ctx.fillStyle = g; ctx.fillRect(sx - w, sy - Hh, w * 2, Hh); ctx.strokeStyle = INK; ctx.lineWidth = 1.4; ctx.strokeRect(sx - w, sy - Hh, w * 2, Hh);
+    ctx.fillStyle = 'rgba(20,10,4,0.35)'; for (const z of [0.3, 0.62]) ctx.fillRect(sx - w, sy - Hh * z, w * 2, 2);
+  }
+
+  // training hall floor: pale boards around a big tatami square
+  buildDojoGround(g, N, E, r) {
+    const b = this.biome;
+    for (let i = -E; i < N + E; i++) for (let j = -E; j < N + E; j++) {
+      const out = Math.max(0, -i, -j, i - N + 1, j - N + 1);
+      const hv = clamp(0.5 + Math.sin(i * 0.9) * 0.2 + (hash2(i, j) - 0.5) * 0.2, 0, 0.999);
+      const col = out > 0 ? shade(b.outer, (hv - 0.5) * 0.1) : b.grass[Math.floor(hv * b.grass.length)];
+      g.globalAlpha = out > 0 ? clamp(1 - (out - 1) / (E - 1), 0, 1) : 1;
+      poly(g, [P(i, j), P(i + 1, j), P(i + 1, j + 1), P(i, j + 1)], col, col, 1.2);
+    }
+    g.globalAlpha = 1;
+    g.strokeStyle = 'rgba(60,34,14,0.4)'; g.lineWidth = 1.2;
+    for (let i = 0; i <= N * 2; i++) { const a = P(i / 2, 0), c = P(i / 2, N); g.beginPath(); g.moveTo(a[0], a[1]); g.lineTo(c[0], c[1]); g.stroke(); }
+    for (let k = 0; k < 140; k++) { const x = r.range(0, N), y = r.range(0, N), a = P(x, y), c = P(x, y + r.range(0.6, 1.6)); g.strokeStyle = 'rgba(255,240,210,0.08)'; g.lineWidth = 3; g.beginPath(); g.moveTo(a[0], a[1]); g.lineTo(c[0], c[1]); g.stroke(); }
+    // the tatami square: 2x1 mats in alternating directions, dark cloth borders
+    const t0 = 4, t1 = N - 4;
+    for (let x = t0; x < t1; x += 2) for (let y = t0; y < t1; y += 2) {
+      const flip = ((x + y) / 2) % 2 === 0;
+      const mats = flip ? [[x, y, x + 2, y + 1], [x, y + 1, x + 2, y + 2]] : [[x, y, x + 1, y + 2], [x + 1, y, x + 2, y + 2]];
+      for (const [ax, ay, bx, by] of mats) {
+        poly(g, [P(ax, ay), P(bx, ay), P(bx, by), P(ax, by)], (ax + ay) % 3 === 0 ? '#c8c088' : '#c2b880', null);
+        g.strokeStyle = 'rgba(150,140,90,0.35)'; g.lineWidth = 1;
+        for (let q = 1; q < 8; q++) { const u = q / 8; const a = flip ? P(ax + (bx - ax) * u, ay) : P(ax, ay + (by - ay) * u), c = flip ? P(ax + (bx - ax) * u, by) : P(bx, ay + (by - ay) * u); g.beginPath(); g.moveTo(a[0], a[1]); g.lineTo(c[0], c[1]); g.stroke(); }
+        g.strokeStyle = '#2e4a2a'; g.lineWidth = 3;
+        const e = flip ? [[P(ax, ay), P(bx, ay)], [P(ax, by), P(bx, by)]] : [[P(ax, ay), P(ax, by)], [P(bx, ay), P(bx, by)]];
+        for (const [a, c] of e) { g.beginPath(); g.moveTo(a[0], a[1]); g.lineTo(c[0], c[1]); g.stroke(); }
+      }
+    }
+    poly(g, [P(t0, t0), P(t1, t0), P(t1, t1), P(t0, t1)], null, 'rgba(40,24,10,0.6)', 3);
+    poly(g, [P(0, 0), P(N, 0), P(N, N), P(0, N)], null, 'rgba(40,24,10,0.45)', 4);
+  }
+
+  // temple: a raked gravel forecourt with stone steps up to the platform
+  bakeTempleCourt(g, r) {
+    const T = this.temple, mx = (T.x0 + T.x1) / 2, x0 = mx - 2.8, x1 = mx + 2.8, y0 = T.y1, y1 = T.y1 + 4.4;
+    const gravel = this.bi === 2 ? '#dfe4ec' : this.bi === 3 ? '#8a8690' : '#d8cfbc';
+    poly(g, [P(x0, y0), P(x1, y0), P(x1, y1), P(x0, y1)], gravel, 'rgba(60,50,40,0.35)', 2);
+    g.strokeStyle = 'rgba(120,110,90,0.35)'; g.lineWidth = 1;
+    for (let y = y0 + 0.25; y < y1; y += 0.25) { const a = P(x0, y), c = P(x1, y); g.beginPath(); g.moveTo(a[0], a[1]); g.lineTo(c[0], c[1]); g.stroke(); }
+    // the stone path up the middle and three steps onto the platform
+    for (let y = y0 + 0.9; y < y1; y += 0.6) poly(g, [P(mx - 0.6, y), P(mx + 0.6, y), P(mx + 0.6, y + 0.5), P(mx - 0.6, y + 0.5)], shade('#9a948a', r.range(-0.08, 0.08)), 'rgba(30,25,30,0.55)', 1.1);
+    const plat = 0.32;
+    for (let k = 0; k < 3; k++) {
+      const zt = plat * (1 - k / 3), ya = y0 + k * 0.28, yb = ya + 0.28;
+      poly(g, [P(mx - 1.1, ya, zt), P(mx + 1.1, ya, zt), P(mx + 1.1, yb, zt), P(mx - 1.1, yb, zt)], '#b8b0a2', INK, 1.1);
+      poly(g, [P(mx - 1.1, yb, zt), P(mx + 1.1, yb, zt), P(mx + 1.1, yb, zt - plat / 3), P(mx - 1.1, yb, zt - plat / 3)], '#8a8274', INK, 1.1);
+    }
+  }
+  // library: polished floorboards inside
+  bakeLibraryFloor(g, r) {
+    const { x0, y0, x1, y1 } = this.library;
+    poly(g, [P(x0 - 0.15, y0 - 0.15), P(x1 + 0.15, y0 - 0.15), P(x1 + 0.15, y1 + 0.15), P(x0 - 0.15, y1 + 0.15)], '#8a8478', INK, 1.4); // stone edge
+    poly(g, [P(x0, y0), P(x1, y0), P(x1, y1), P(x0, y1)], '#9a6a40', null);
+    g.strokeStyle = 'rgba(50,28,12,0.45)'; g.lineWidth = 1;
+    for (let x = x0 + 0.5; x < x1; x += 0.5) { const a = P(x, y0), c = P(x, y1); g.beginPath(); g.moveTo(a[0], a[1]); g.lineTo(c[0], c[1]); g.stroke(); }
+    for (let k = 0; k < 30; k++) { const x = r.range(x0, x1), y = r.range(y0, y1 - 1), a = P(x, y), c = P(x, y + r.range(0.5, 1)); g.strokeStyle = 'rgba(255,230,190,0.1)'; g.lineWidth = 3; g.beginPath(); g.moveTo(a[0], a[1]); g.lineTo(c[0], c[1]); g.stroke(); }
+    // a rug in front of the desk
+    const D = this.library.desk;
+    poly(g, [P(D.x - 1.1, D.y + 0.5), P(D.x + 1.1, D.y + 0.5), P(D.x + 1.1, D.y + 1.6), P(D.x - 1.1, D.y + 1.6)], '#7a2a24', '#d8a838', 1.5);
+  }
+
   drawRail(ctx, p) {
-    const a = p.axis === 'x' ? [P(p.x - 0.5, p.y), P(p.x + 0.5, p.y)] : [P(p.x, p.y - 0.5), P(p.x, p.y + 0.5)];
+    if (p.style === 'dojo') { // a low wooden rail along the open front of the training hall
+      const a = p.axis === 'x' ? [P(p.x - 0.5, p.y), P(p.x + 0.5, p.y)] : [P(p.x, p.y - 0.5), P(p.x, p.y + 0.5)];
+      ctx.strokeStyle = INK; ctx.lineWidth = 4; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(a[0][0], a[0][1] - 12); ctx.lineTo(a[1][0], a[1][1] - 12); ctx.stroke();
+      ctx.strokeStyle = '#8a6038'; ctx.lineWidth = 2.4; ctx.stroke();
+      ctx.strokeStyle = '#2a180c'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(a[0][0], a[0][1]); ctx.lineTo(a[0][0], a[0][1] - 13); ctx.stroke();
+      return;
+    }
+    const a =p.axis === 'x' ? [P(p.x - 0.5, p.y), P(p.x + 0.5, p.y)] : [P(p.x, p.y - 0.5), P(p.x, p.y + 0.5)];
     ctx.strokeStyle = INK; ctx.lineWidth = 4; ctx.lineCap = 'round';
     ctx.beginPath(); ctx.moveTo(a[0][0], a[0][1] - 12); ctx.lineTo(a[1][0], a[1][1] - 12); ctx.stroke();
     ctx.strokeStyle = '#8a1420'; ctx.lineWidth = 2.4; ctx.stroke();
@@ -1322,7 +2091,7 @@ export class World {
 
   // Spring only: sun shafts, low morning mist and butterflies (screen space, projected from the world)
   drawAtmosphere(ctx, view, t) {
-    if (this.bi !== 0) return;
+    if (this.bi !== 0 || this.indoor) return;
     const W = view.W, H = view.H, k = view.s;
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
@@ -1387,6 +2156,11 @@ export class World {
   }
 }
 
+// screen-space box around a block of the world (x0..x1, y0..y1) up to height z
+function boxBounds(x0, y0, x1, y1, z) {
+  const l = isoX(x0, y1), r = isoX(x1, y0), top = isoY(x0, y0, z), bot = isoY(x1, y1);
+  return [l, top, r - l, bot - top];
+}
 function randiSafe(a, b) { return Math.floor(a + Math.random() * (b - a + 1)); }
 
 function makeBlobs(r) {

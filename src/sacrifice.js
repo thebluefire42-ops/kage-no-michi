@@ -21,17 +21,17 @@ export const SACRIFICES = {
     apply(p) { p.stats.baseDamage *= 0.7; p.stats.cooldownMul *= 0.55; },
   },
   covenant: {
-    title: 'Elemental Covenant', jp: '元素', cost: 'No more critical hits', gain: 'Elements 2× as strong', cs: ['critChance'],
+    title: 'Imbued Covenant', jp: '元素', cost: 'No more critical hits', gain: 'Imbuements 2× as strong', cs: ['critChance'],
     excl: ['executioner'], apply(p) { p.noCrit = true; p.elemMul = 2; },
   },
   executioner: {
-    title: 'Patient Executioner', jp: '処刑', cost: 'Attack cooldowns doubled', gain: 'Every hit is a critical hit', gs: ['critChance'],
-    excl: ['covenant'], apply(p) { p.stats.cooldownMul *= 2; p.alwaysCrit = true; },
+    title: 'Patient Executioner', jp: '処刑', cost: 'Attack cooldowns ×1.5', gain: 'Every hit is a critical hit', gs: ['critChance'],
+    excl: ['covenant'], apply(p) { p.stats.cooldownMul *= 1.5; p.alwaysCrit = true; },
   },
   singlePath: {
-    title: 'The Single Path', jp: '一道', cost: 'Keep only your first talent', gain: '−50% talent cooldown',
+    title: 'The Single Path', jp: '一道', cost: 'Keep only your first talent', gain: '−60% talent cooldown',
     excl: ['bareBlade'], needs: (p) => !p.sac.includes('bareBlade'),
-    apply(p) { p.talents = p.talents.slice(0, 1); for (const t of p.talents) { t.cdMul *= 0.5; t.minMul = 0.5; } p.singlePath = true; },
+    apply(p) { p.talents = p.talents.slice(0, 1); for (const t of p.talents) { t.cdMul *= 0.4; t.minMul = 0.4; } p.singlePath = true; },
   },
   bloodOffering: {
     title: 'Blood Offering', jp: '血供', cost: 'Lose 35 health now', gain: '+10% legendary chance',
@@ -46,11 +46,11 @@ export const SACRIFICES = {
     excl: ['middleWay', 'bloodOffering'], apply(p) { p.dicemaster = true; },
   },
   boundSouls: {
-    title: 'Bound Souls', jp: '縁', coop: true, pact: true, cost: 'Both deal −20% damage', gain: 'Share all damage taken', cs: ['baseDamage'],
-    apply(p) { p.bound = true; p.dmgMul = (p.dmgMul || 1) * 0.8; },
+    title: 'Bound Souls', jp: '縁', coop: true, pact: true, cost: 'Both take +25% damage', gain: 'Share all damage taken',
+    apply(p) { p.bound = true; p.takenMul = (p.takenMul || 1) * 1.25; },
   },
   lifebinder: {
-    title: 'Lifebinder', jp: '献身', coop: true, cost: 'Syphon stops healing you', gain: 'Syphon heals your partner ×1.2',
+    title: 'Lifebinder', jp: '献身', coop: true, cost: 'Syphon stops healing you', gain: 'Syphon heals your partner ×1.5',
     needs: (p) => p.weapons.some((w) => w.elements.syphon > 0), apply(p) { p.lifebinder = true; },
   },
 };
@@ -89,6 +89,7 @@ export function takeSacrifice(p, key) {
   const S = SACRIFICES[key];
   if (!S) return false;
   p.sac.push(key);
+  (p.picked || (p.picked = [])).push({ type: 'sacrifice', key, rarity: 0 }); // for the pause menu's list of this run's cards
   if (S.pact) return true;
   S.apply(p);
   return false;
@@ -136,7 +137,7 @@ export class Monk {
       const p = this.nearest();
       const dx = p.x - this.x, dy = p.y - this.y, d = Math.hypot(dx, dy) || 1;
       this.face(dx, dy);
-      if (d > 2.3 && this.t < 5) {
+      if (d > 2.3 && this.t < (this.maxWalk || 5)) {
         this.x += (dx / d) * 2.8 * dt; this.y += (dy / d) * 2.8 * dt; g.world.collide(this);
         this.moveAmt = lerp(this.moveAmt, 0.7, 0.2); this.walk += dt * 7;
       } else { this.state = 'wait'; this.t = 0; if (this.onArrive) { this.onArrive(); this.onArrive = null; } }
@@ -260,112 +261,190 @@ export function drawSacrificeCard(ctx, card, w, h, t, st) {
   // crimson aura (stronger, with a heartbeat, on the selected card)
   const beat = sel ? Math.pow(Math.max(0, Math.sin(t * 5.2)), 6) : 0;
   ctx.save();
-  ctx.shadowColor = 'rgba(210,20,30,0.95)'; ctx.shadowBlur = (24 + 8 * Math.sin(t * 2.4) + beat * 26) * (sel ? 1.35 : 1);
-  rrect(ctx, x0, y0, w, h, 10); ctx.fillStyle = '#0c0608'; ctx.fill();
+  ctx.shadowColor = 'rgba(210,20,30,0.95)'; ctx.shadowBlur = (22 + 8 * Math.sin(t * 2.4) + beat * 26) * (sel ? 1.35 : 1);
+  rrect(ctx, x0, y0, w, h, 4); ctx.fillStyle = '#0c0608'; ctx.fill();
   ctx.restore();
-  // frame: black lacquer with a crimson sheen and thin gold edges
-  rrect(ctx, x0, y0, w, h, 10);
-  const fg = ctx.createLinearGradient(x0, y0, x0 + w, y0 + h);
-  fg.addColorStop(0, '#16050a'); fg.addColorStop(0.5, '#5e0c14'); fg.addColorStop(1, '#16050a');
-  ctx.fillStyle = fg; ctx.fill();
-  ctx.strokeStyle = 'rgba(200,150,60,0.55)'; ctx.lineWidth = 1; rrect(ctx, x0 + 3, y0 + 3, w - 6, h - 6, 8); ctx.stroke();
-  const fw = 9, ix = x0 + fw, iy = y0 + fw, iw = w - fw * 2, ih = h - fw * 2;
-  rrect(ctx, ix, iy, iw, ih, 6);
-  const bg = ctx.createLinearGradient(0, iy, 0, iy + ih);
-  bg.addColorStop(0, '#26121a'); bg.addColorStop(1, '#120709');
-  ctx.fillStyle = bg; ctx.fill();
-  ctx.strokeStyle = '#b8862a'; ctx.lineWidth = 1.4; ctx.stroke();
 
-  // header
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.font = '800 11px "Zen Kaku Gothic New", sans-serif'; ctx.fillStyle = '#e8b050';
-  const head = S.pact ? 'CO-OP PACT' : 'SACRIFICE';
-  ctx.fillText(head, 0, iy + 15);
-  const hw = ctx.measureText(head).width / 2 + 12;
-  for (const sx of [-1, 1]) { // blood drops either side
-    ctx.fillStyle = '#d0303a'; ctx.beginPath(); const dx = sx * hw;
-    ctx.moveTo(dx, iy + 9); ctx.bezierCurveTo(dx + 4, iy + 14, dx + 4, iy + 19, dx, iy + 20); ctx.bezierCurveTo(dx - 4, iy + 19, dx - 4, iy + 14, dx, iy + 9); ctx.fill();
+  // ---- mount: black lacquer with a crimson sheen, a gold inner line, gold corner fittings
+  rrect(ctx, x0, y0, w, h, 4);
+  const fg = ctx.createLinearGradient(x0, y0, x0 + w, y0 + h);
+  fg.addColorStop(0, '#1a0806'); fg.addColorStop(0.5, '#3a0c0e'); fg.addColorStop(1, '#180806');
+  ctx.fillStyle = fg; ctx.fill();
+  ctx.save(); rrect(ctx, x0, y0, w, h, 4); ctx.clip(); // the lacquer worn thin at the edges
+  ctx.strokeStyle = 'rgba(130,80,45,0.28)'; ctx.lineWidth = 1;
+  for (let k = 0; k < 14; k++) { const yy = y0 + ((k * 67.3) % h), xx = k % 2 ? x0 + 2 + (k % 5) : x0 + w - 2 - (k % 5); ctx.beginPath(); ctx.moveTo(xx, yy); ctx.lineTo(xx, yy + 10 + (k % 4) * 5); ctx.stroke(); }
+  ctx.strokeStyle = 'rgba(0,0,0,0.45)'; ctx.lineWidth = 0.6; // fine crackle in the old lacquer
+  for (let k = 0; k < 22; k++) {
+    const side = k % 4, u0 = ((k * 37.7) % 1000) / 1000;
+    let cx = side === 0 ? x0 + 4 : side === 1 ? x0 + w - 4 : x0 + u0 * w, cy = side < 2 ? y0 + u0 * h : side === 2 ? y0 + 4 : y0 + h - 4;
+    ctx.beginPath(); ctx.moveTo(cx, cy);
+    for (let q = 0; q < 3; q++) { cx += Math.sin(k * 3.1 + q * 1.7) * 3; cy += Math.cos(k * 2.3 + q * 2.1) * 3; ctx.lineTo(cx, cy); }
+    ctx.stroke();
+  }
+  ctx.restore();
+  ctx.strokeStyle = '#000'; ctx.lineWidth = 1.5; rrect(ctx, x0, y0, w, h, 4); ctx.stroke();
+  const fw = 9, ix = x0 + fw, iy = y0 + fw, iw = w - fw * 2, ih = h - fw * 2;
+  // the paper: dark, aged, with faint fibres
+  rrect(ctx, ix, iy, iw, ih, 3);
+  const bg = ctx.createLinearGradient(0, iy, 0, iy + ih);
+  bg.addColorStop(0, '#2a1214'); bg.addColorStop(1, '#140809');
+  ctx.fillStyle = bg; ctx.fill();
+  ctx.save(); rrect(ctx, ix, iy, iw, ih, 3); ctx.clip();
+  ctx.strokeStyle = 'rgba(255,200,160,0.045)'; ctx.lineWidth = 1;
+  for (let k = 0; k < 26; k++) { const yy = iy + ((k * 53.1) % ih), xx = ix + ((k * 31.7) % iw); ctx.beginPath(); ctx.moveTo(xx, yy); ctx.quadraticCurveTo(xx + 10, yy + 2, xx + 22, yy - 1); ctx.stroke(); }
+  for (let k = 0; k < 5; k++) { // faint old stains
+    const sx = ix + ((k * 71.9 + card.key.length * 13) % iw), sy = iy + ((k * 97.3 + card.key.length * 29) % ih), r = 10 + (k % 3) * 8;
+    const sg = ctx.createRadialGradient(sx, sy, r * 0.3, sx, sy, r); sg.addColorStop(0, 'rgba(120,64,30,0.08)'); sg.addColorStop(0.85, 'rgba(120,64,30,0.16)'); sg.addColorStop(1, 'rgba(110,60,30,0)');
+    ctx.fillStyle = sg; ctx.beginPath(); ctx.arc(sx, sy, r, 0, TAU); ctx.fill();
+  }
+  const edge = ctx.createRadialGradient(0, 0, Math.min(iw, ih) * 0.4, 0, 0, Math.max(iw, ih) * 0.62); // edges darkened with age
+  edge.addColorStop(0, 'rgba(0,0,0,0)'); edge.addColorStop(1, 'rgba(8,2,0,0.45)');
+  ctx.fillStyle = edge; ctx.fillRect(ix, iy, iw, ih);
+  ctx.fillStyle = 'rgba(120,70,30,0.08)'; ctx.fillRect(ix, iy, iw, ih); // a warm, tea-stained tint over everything
+  ctx.fillStyle = 'rgba(130,70,30,0.22)'; for (let k = 0; k < 18; k++) { ctx.beginPath(); ctx.arc(ix + ((k * 43.7 + card.key.length * 7) % iw), iy + ((k * 61.3 + card.key.length * 11) % ih), 0.6 + (k % 3) * 0.5, 0, TAU); ctx.fill(); } // foxing specks
+  ctx.restore();
+  ctx.strokeStyle = '#9a7434'; ctx.lineWidth = 1.2; rrect(ctx, ix, iy, iw, ih, 2); ctx.stroke();
+  ctx.fillStyle = '#a8844a'; ctx.strokeStyle = '#1a0606'; ctx.lineWidth = 1;
+  for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+    ctx.save(); ctx.translate(sx * (w / 2), sy * (h / 2)); ctx.scale(-sx, -sy);
+    const L = 20; ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(L, 0); ctx.lineTo(L - 4, 5); ctx.lineTo(5, 5); ctx.lineTo(5, L - 4); ctx.lineTo(0, L); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#2a1a0c'; ctx.beginPath(); ctx.arc(8.5, 8.5, 2, 0, TAU); ctx.fill(); ctx.fillStyle = '#a8844a';
+    ctx.restore();
   }
 
-  // art: night sky, a blood moon carrying the sacrifice's symbol, a sacred rope across the top
-  const ax = ix + 9, ay = iy + 28, aw = iw - 18, ah = ih * 0.38;
-  ctx.save(); rrect(ctx, ax, ay, aw, ah, 4); ctx.clip();
-  const ag = ctx.createLinearGradient(0, ay, 0, ay + ah); ag.addColorStop(0, '#07040a'); ag.addColorStop(1, '#3c0a12');
+  // ---- header band, like the other themed cards: the kind on the left, three blood drops on the right
+  const hb = 20;
+  ctx.fillStyle = '#0a0304'; ctx.fillRect(ix, iy, iw, hb);
+  ctx.strokeStyle = 'rgba(184,134,42,0.6)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(ix, iy + hb); ctx.lineTo(ix + iw, iy + hb); ctx.stroke();
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  { // the chip: a blood drop and the word, the same size as the other cards' chips
+    ctx.font = '800 8.5px "Zen Kaku Gothic New", sans-serif';
+    const cw = ctx.measureText('SACRIFICE').width + 24, ch = 15, cx = ix + iw - 5 - cw, cy = iy + hb / 2;
+    ctx.fillStyle = '#5a0c12'; rrect(ctx, cx, cy - ch / 2, cw, ch, 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,240,210,0.35)'; ctx.lineWidth = 1; ctx.stroke();
+    const dx = cx + 9, dy = cy - 4.5;
+    ctx.fillStyle = '#ff5a5a'; ctx.beginPath(); ctx.moveTo(dx, dy); ctx.bezierCurveTo(dx + 3.5, dy + 4.5, dx + 3.5, dy + 8.5, dx, dy + 9); ctx.bezierCurveTo(dx - 3.5, dy + 8.5, dx - 3.5, dy + 4.5, dx, dy); ctx.fill();
+    ctx.fillStyle = '#f8ecd4'; ctx.fillText('SACRIFICE', cx + 17, cy + 0.5);
+  }
+  for (let k = 0; k < 3; k++) {
+    const dx = ix + 11 + k * 10, dy = iy + 5;
+    ctx.fillStyle = '#c8202a'; ctx.beginPath(); ctx.moveTo(dx, dy); ctx.bezierCurveTo(dx + 3.5, dy + 4.5, dx + 3.5, dy + 9, dx, dy + 9.5); ctx.bezierCurveTo(dx - 3.5, dy + 9, dx - 3.5, dy + 4.5, dx, dy); ctx.fill();
+  }
+
+  // ---- art: a night sky, a blood moon carrying the sacrifice's symbol, mist, red spider lilies, a stone lantern
+  const ax = ix + 8, ay = iy + hb + 7, aw = iw - 16, ah = ih * 0.37;
+  ctx.save(); rrect(ctx, ax, ay, aw, ah, 2); ctx.clip();
+  const ag = ctx.createLinearGradient(0, ay, 0, ay + ah); ag.addColorStop(0, '#050307'); ag.addColorStop(0.7, '#2a070e'); ag.addColorStop(1, '#4a0c14');
   ctx.fillStyle = ag; ctx.fillRect(ax, ay, aw, ah);
-  const mr = ah * 0.36, my = ay + ah * 0.54;
+  for (let k = 0; k < 14; k++) { // stars
+    const sx = ax + ((k * 47.3) % aw), sy = ay + ((k * 23.9) % (ah * 0.5)), tw = 0.35 + 0.35 * Math.sin(t * 2 + k);
+    ctx.fillStyle = `rgba(255,230,220,${tw})`; ctx.fillRect(sx, sy, 1.2, 1.2);
+  }
+  const mr = ah * 0.34, my = ay + ah * 0.5;
+  const halo = ctx.createRadialGradient(0, my, mr * 0.8, 0, my, mr * 1.9); halo.addColorStop(0, 'rgba(220,40,40,0.35)'); halo.addColorStop(1, 'rgba(220,40,40,0)');
+  ctx.fillStyle = halo; ctx.beginPath(); ctx.arc(0, my, mr * 1.9, 0, TAU); ctx.fill();
   const mg = ctx.createRadialGradient(-mr * 0.3, my - mr * 0.3, mr * 0.1, 0, my, mr);
-  mg.addColorStop(0, '#e2424a'); mg.addColorStop(1, '#8a121c');
-  ctx.fillStyle = 'rgba(200,30,40,0.25)'; ctx.beginPath(); ctx.arc(0, my, mr * 1.35, 0, TAU); ctx.fill();
+  mg.addColorStop(0, '#ea4a4e'); mg.addColorStop(1, '#8a121c');
   ctx.fillStyle = mg; ctx.beginPath(); ctx.arc(0, my, mr, 0, TAU); ctx.fill();
   ctx.fillStyle = 'rgba(60,0,8,0.25)'; for (const [cx, cy, r] of [[-0.4, -0.2, 0.18], [0.35, 0.3, 0.13], [0.1, -0.45, 0.1]]) { ctx.beginPath(); ctx.arc(cx * mr, my + cy * mr, r * mr, 0, TAU); ctx.fill(); }
-  // ground silhouette: grass and a stone lantern
-  ctx.fillStyle = '#0a0406'; ctx.beginPath(); ctx.moveTo(ax, ay + ah); ctx.lineTo(ax, ay + ah - 10);
-  for (let i = 0; i <= 14; i++) ctx.lineTo(ax + (aw * i) / 14, ay + ah - 8 - (i % 2 ? 6 : 1) - Math.sin(i * 2.1) * 2);
-  ctx.lineTo(ax + aw, ay + ah); ctx.closePath(); ctx.fill();
-  const lx = ax + aw - 26, ly = ay + ah - 8;
-  ctx.fillRect(lx - 3, ly - 22, 6, 22); ctx.fillRect(lx - 9, ly - 30, 18, 8); ctx.beginPath(); ctx.moveTo(lx - 12, ly - 30); ctx.lineTo(lx, ly - 38); ctx.lineTo(lx + 12, ly - 30); ctx.closePath(); ctx.fill();
-  ctx.fillStyle = `rgba(255,150,70,${0.6 + 0.3 * Math.sin(t * 7)})`; ctx.fillRect(lx - 5, ly - 28, 10, 4);
-  for (let i = 0; i < 12; i++) { // rising embers
-    const life = (t * 0.35 + i / 12) % 1;
-    ctx.fillStyle = `rgba(255,150,80,${Math.sin(life * Math.PI) * 0.8})`;
-    ctx.beginPath(); ctx.arc(ax + ((i * 41.3) % aw) + Math.sin(t + i) * 3, ay + ah - life * ah, 1.3, 0, TAU); ctx.fill();
+  // drifting mist across the moon
+  for (let k = 0; k < 2; k++) {
+    const mx = ax - 30 + ((t * (6 + k * 3) + k * 70) % (aw + 60)), myy = my + mr * (0.35 + k * 0.4);
+    ctx.fillStyle = 'rgba(40,8,14,0.55)'; rrect(ctx, mx, myy, 70, 6, 3); ctx.fill();
   }
   ctx.save(); ctx.translate(0, my); ctx.scale(mr / 38, mr / 38);
   ctx.shadowColor = 'rgba(0,0,0,0.7)'; ctx.shadowBlur = 6;
   drawSacGlyph(ctx, card.key, '#f8ead2');
   ctx.restore();
+  // ground and a stone lantern
+  const gy = ay + ah - 9;
+  ctx.fillStyle = '#0a0406'; ctx.beginPath(); ctx.moveTo(ax, ay + ah); ctx.lineTo(ax, gy);
+  for (let k = 0; k <= 14; k++) ctx.lineTo(ax + (aw * k) / 14, gy + 1 - (k % 2 ? 4 : 0) - Math.sin(k * 2.1) * 1.5);
+  ctx.lineTo(ax + aw, ay + ah); ctx.closePath(); ctx.fill();
+  const lx = ax + aw - 22, ly = gy + 2;
+  ctx.fillRect(lx - 3, ly - 20, 6, 20); ctx.fillRect(lx - 8, ly - 27, 16, 7); ctx.beginPath(); ctx.moveTo(lx - 11, ly - 27); ctx.lineTo(lx, ly - 34); ctx.lineTo(lx + 11, ly - 27); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = `rgba(255,150,70,${0.6 + 0.3 * Math.sin(t * 7)})`; ctx.fillRect(lx - 4.5, ly - 25.5, 9, 3.5);
+  for (let k = 0; k < 8; k++) { // red petals drifting down
+    const life = (t * 0.18 + k / 8) % 1, px = ax + ((k * 41.3) % aw) + Math.sin(t * 1.4 + k) * 6, py = ay + life * ah;
+    ctx.save(); ctx.translate(px, py); ctx.rotate(t * 2 + k); ctx.fillStyle = `rgba(230,40,48,${Math.sin(life * Math.PI) * 0.8})`;
+    ctx.beginPath(); ctx.ellipse(0, 0, 2.2, 1, 0, 0, TAU); ctx.fill(); ctx.restore();
+  }
   // shimenawa rope with paper streamers
-  ctx.strokeStyle = '#c8a868'; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(ax - 2, ay + 6); ctx.quadraticCurveTo(0, ay + 16, ax + aw + 2, ay + 6); ctx.stroke();
-  ctx.strokeStyle = 'rgba(90,60,20,0.6)'; ctx.lineWidth = 1; for (let i = 0; i < 18; i++) { const x = ax + (aw * i) / 18, y = ay + 6 + Math.sin((i / 18) * Math.PI) * 10; ctx.beginPath(); ctx.moveTo(x - 2, y - 2); ctx.lineTo(x + 2, y + 2); ctx.stroke(); }
+  ctx.strokeStyle = '#c8a868'; ctx.lineWidth = 3.5; ctx.beginPath(); ctx.moveTo(ax - 2, ay + 5); ctx.quadraticCurveTo(0, ay + 14, ax + aw + 2, ay + 5); ctx.stroke();
+  ctx.strokeStyle = 'rgba(90,60,20,0.6)'; ctx.lineWidth = 1; for (let k = 0; k < 18; k++) { const x = ax + (aw * k) / 18, y = ay + 5 + Math.sin((k / 18) * Math.PI) * 9; ctx.beginPath(); ctx.moveTo(x - 2, y - 2); ctx.lineTo(x + 2, y + 2); ctx.stroke(); }
   for (const sx of [-0.3, 0.3]) {
-    const px = sx * aw, py = ay + 6 + Math.cos(sx * Math.PI) * 10;
-    // shide: a zig-zag paper streamer
-    ctx.strokeStyle = '#f4efe4'; ctx.lineWidth = 2.6; ctx.lineJoin = 'miter';
+    const px = sx * aw, py = ay + 5 + Math.cos(sx * Math.PI) * 9;
+    ctx.strokeStyle = '#f4efe4'; ctx.lineWidth = 2.4; ctx.lineJoin = 'miter';
     ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px + 4, py + 4); ctx.lineTo(px - 2, py + 8); ctx.lineTo(px + 4, py + 12); ctx.lineTo(px - 2, py + 16); ctx.stroke();
   }
-  // the kanji as a small vermilion seal in the corner
   ctx.restore();
-  ctx.save(); ctx.translate(ax + 18, ay + ah - 18); ctx.rotate(-0.08);
-  ctx.fillStyle = '#b52a22'; rrect(ctx, -13, -13, 26, 26, 3); ctx.fill();
-  ctx.fillStyle = '#fbefe0'; ctx.font = `800 ${S.jp.length > 1 ? 10 : 16}px "Shippori Mincho", serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  if (S.jp.length > 1) { ctx.fillText(S.jp[0], 0, -5); ctx.fillText(S.jp[1], 0, 6); } else ctx.fillText(S.jp, 0, 1);
+  // vermilion seal with the sacrifice's kanji, like the hanko on the other cards
+  ctx.save(); ctx.translate(ax + 16, ay + ah - 18); ctx.rotate(-0.08);
+  ctx.fillStyle = '#b52a22'; rrect(ctx, -12, -12, 24, 24, 3); ctx.fill();
+  ctx.strokeStyle = 'rgba(251,239,224,0.6)'; ctx.lineWidth = 0.8; rrect(ctx, -9.5, -9.5, 19, 19, 2); ctx.stroke();
+  ctx.fillStyle = '#fbefe0'; ctx.font = `800 ${S.jp.length > 1 ? 9 : 14}px "Shippori Mincho", serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  if (S.jp.length > 1) { ctx.fillText(S.jp[0], 0, -4.5); ctx.fillText(S.jp[1], 0, 5.5); } else ctx.fillText(S.jp, 0, 1);
   ctx.restore();
-  ctx.strokeStyle = '#b8862a'; ctx.lineWidth = 1.4; rrect(ctx, ax, ay, aw, ah, 4); ctx.stroke();
+  ctx.strokeStyle = '#000'; ctx.lineWidth = 1.6; rrect(ctx, ax, ay, aw, ah, 2); ctx.stroke();
 
-  // title banner
-  const by = ay + ah + 9, bh = 28;
-  ctx.fillStyle = '#4a0a10';
-  ctx.beginPath(); ctx.moveTo(ix + 2, by); ctx.lineTo(ix + iw - 2, by); ctx.lineTo(ix + iw - 10, by + bh / 2); ctx.lineTo(ix + iw - 2, by + bh); ctx.lineTo(ix + 2, by + bh); ctx.lineTo(ix + 10, by + bh / 2); ctx.closePath(); ctx.fill();
-  ctx.strokeStyle = 'rgba(200,140,60,0.5)'; ctx.lineWidth = 1; ctx.stroke();
+  // ---- name, brushed, with a blood-red stroke under it (as on the other cards)
+  const ny = ay + ah + 20;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  let tsz = 17; ctx.font = `800 ${tsz}px "Shippori Mincho", serif`;
-  while (ctx.measureText(S.title).width > iw - 30 && tsz > 11) { tsz--; ctx.font = `800 ${tsz}px "Shippori Mincho", serif`; }
-  ctx.fillStyle = '#ffe6b0'; ctx.fillText(S.title, 0, by + bh / 2 + 1);
+  let tsz = 19; ctx.font = `800 ${tsz}px "Shippori Mincho", serif`;
+  while (ctx.measureText(S.title).width > iw - 20 && tsz > 12) { tsz--; ctx.font = `800 ${tsz}px "Shippori Mincho", serif`; }
+  ctx.fillStyle = '#f6e2bc'; ctx.fillText(S.title, 0, ny);
+  const nw = Math.min(iw - 30, ctx.measureText(S.title).width + 20);
+  ctx.fillStyle = 'rgba(200,24,34,0.9)';
+  ctx.beginPath(); ctx.moveTo(-nw / 2, ny + 13); ctx.quadraticCurveTo(0, ny + 10, nw / 2, ny + 12); ctx.lineTo(nw / 2 - 6, ny + 15); ctx.quadraticCurveTo(0, ny + 14.5, -nw / 2 + 4, ny + 15.5); ctx.closePath(); ctx.fill();
 
-  // cost and gain rows
-  const row = (y, label, body, stat, down) => {
-    const rh = 44, rx = ix + 7, rw = iw - 14;
-    const g = ctx.createLinearGradient(rx, 0, rx + rw, 0);
-    if (down) { g.addColorStop(0, 'rgba(150,20,30,0.55)'); g.addColorStop(1, 'rgba(70,8,14,0.4)'); } else { g.addColorStop(0, 'rgba(150,110,30,0.45)'); g.addColorStop(1, 'rgba(70,50,10,0.3)'); }
-    ctx.fillStyle = g; rrect(ctx, rx, y, rw, rh, 6); ctx.fill();
-    ctx.strokeStyle = down ? 'rgba(255,90,90,0.45)' : 'rgba(255,207,90,0.45)'; ctx.lineWidth = 1; ctx.stroke();
-    rowBadge(ctx, rx + 19, y + rh / 2, 24, stat, down);
-    ctx.textAlign = 'left';
-    ctx.font = '800 9.5px "Zen Kaku Gothic New", sans-serif'; ctx.fillStyle = down ? '#ff7a7a' : '#ffcf5a';
-    ctx.fillText(label, rx + 37, y + 12);
-    let bs = 14; ctx.font = `800 ${bs}px "Zen Kaku Gothic New", sans-serif`;
-    while (ctx.measureText(body).width > rw - 44 && bs > 9.5) { bs -= 0.5; ctx.font = `800 ${bs}px "Zen Kaku Gothic New", sans-serif`; }
-    ctx.fillStyle = down ? '#ffd6d0' : '#fff2cc'; ctx.fillText(body, rx + 37, y + 29);
+  // ---- what you give up and what you gain: two rows that fill the space down to the footer,
+  // in the cards' own font, with muted old colours (dried blood red / old gold) and room around the text
+  const fy = iy + ih - 12;
+  const ry = ny + 25, gap = 7, rh = Math.max(40, (fy - 21 - ry - gap) / 2);
+  const row = (y, label, body, down) => {
+    const rx = ix + 8, rw = iw - 16, pad = 9;
+    const col = down ? '#b8483e' : '#b89048', ink = down ? '#e8cfc4' : '#e8d9b2';
+    const tg = ctx.createLinearGradient(0, y, 0, y + rh);
+    tg.addColorStop(0, down ? 'rgba(74,16,14,0.62)' : 'rgba(70,52,20,0.56)'); tg.addColorStop(1, down ? 'rgba(46,10,8,0.62)' : 'rgba(44,32,12,0.56)');
+    ctx.fillStyle = tg; rrect(ctx, rx, y, rw, rh, 1.5); ctx.fill();
+    ctx.strokeStyle = 'rgba(8,2,0,0.75)'; ctx.lineWidth = 1.2; ctx.stroke();
+    ctx.strokeStyle = down ? 'rgba(184,72,62,0.3)' : 'rgba(184,144,72,0.3)'; ctx.lineWidth = 0.7; rrect(ctx, rx + 2.5, y + 2.5, rw - 5, rh - 5, 1); ctx.stroke();
+    ctx.fillStyle = down ? '#7e2a22' : '#86683a'; ctx.fillRect(rx, y, 3, rh);
+    // the ▼ / ▲ badge, in the same muted colours
+    const br = Math.min(13, rh / 2 - 5), bx = rx + pad + br, by = y + rh / 2;
+    ctx.fillStyle = 'rgba(14,6,4,0.92)'; ctx.beginPath(); ctx.arc(bx, by, br, 0, TAU); ctx.fill();
+    ctx.strokeStyle = col; ctx.lineWidth = 1.6; ctx.stroke();
+    ctx.fillStyle = col; const kk = br * 0.45;
+    ctx.beginPath(); if (down) { ctx.moveTo(-kk + bx, by - kk * 0.6); ctx.lineTo(kk + bx, by - kk * 0.6); ctx.lineTo(bx, by + kk); } else { ctx.moveTo(-kk + bx, by + kk * 0.6); ctx.lineTo(kk + bx, by + kk * 0.6); ctx.lineTo(bx, by - kk); } ctx.closePath(); ctx.fill();
+    // label (bold) and the text, wrapped onto two lines when needed
+    const tx = bx + br + 9, tw = rx + rw - pad - tx;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.font = `900 10.5px "Zen Kaku Gothic New", sans-serif`; ctx.fillStyle = col;
+    const ly = y + pad + 5;
+    ctx.fillText(label, tx, ly);
+    const area0 = ly + 8, area1 = y + rh - pad + 1; // the text sits between the label and the bottom padding
+    let bs = 14, lines;
+    for (;;) { // shrink until it fits both the width (two lines at most) and the height
+      ctx.font = `800 ${bs}px "Zen Kaku Gothic New", sans-serif`; lines = wrapText(ctx, body, tw);
+      if ((lines.length <= 2 && lines.length * bs * 1.15 <= area1 - area0) || bs <= 8.5) break;
+      bs -= 0.5;
+    }
+    lines = lines.slice(0, 2);
+    const lh = bs * 1.15, top = area0 + Math.max(0, (area1 - area0 - lines.length * lh) / 2) + lh / 2;
+    ctx.fillStyle = ink; lines.forEach((l, k) => ctx.fillText(l, tx, top + k * lh));
     ctx.textAlign = 'center';
   };
-  const ry = by + bh + 10;
-  row(ry, 'YOU GIVE UP', S.cost, S.cs && S.cs[0], true);
-  row(ry + 52, 'YOU GAIN', S.gain, S.gs && S.gs[0], false);
-  ctx.font = '700 10px "Zen Kaku Gothic New", sans-serif'; ctx.fillStyle = 'rgba(255,220,180,0.62)';
-  ctx.fillText(S.pact ? 'Only binds if both players choose it' : 'Permanent for this run', 0, iy + ih - 11);
+  row(ry, 'YOU SACRIFICE', S.cost, true);
+  row(ry + rh + gap, 'YOU GAIN', S.gain, false);
+  // footer: a thin rule with a diamond, then the note
+  ctx.strokeStyle = 'rgba(184,134,42,0.45)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(ix + 20, fy - 11); ctx.lineTo(-5, fy - 11); ctx.moveTo(5, fy - 11); ctx.lineTo(ix + iw - 20, fy - 11); ctx.stroke();
+  ctx.fillStyle = '#c8202a'; ctx.beginPath(); ctx.moveTo(0, fy - 14); ctx.lineTo(3, fy - 11); ctx.lineTo(0, fy - 8); ctx.lineTo(-3, fy - 11); ctx.closePath(); ctx.fill();
+  ctx.font = '700 9.5px "Zen Kaku Gothic New", sans-serif'; ctx.fillStyle = 'rgba(232,206,170,0.6)';
+  ctx.fillText(S.pact ? 'Only binds if both players choose it' : 'Permanent for this run', 0, fy);
   // selection outline, pulsing with the heartbeat
   if (sel) {
     ctx.save(); ctx.lineWidth = 3 + beat * 2; ctx.strokeStyle = '#ff4a4a'; ctx.globalAlpha = 0.55 + 0.45 * beat;
-    rrect(ctx, x0 - 6, y0 - 6, w + 12, h + 12, 14); ctx.stroke(); ctx.restore();
+    rrect(ctx, x0 - 6, y0 - 6, w + 12, h + 12, 6); ctx.stroke(); ctx.restore();
   }
 }

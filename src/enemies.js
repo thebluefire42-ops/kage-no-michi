@@ -1,7 +1,7 @@
 // Enemies, bosses, enemy/player projectiles and area hazards.
 import { TAU, clamp, lerp, rand, pick, ease, isoX, isoY, worldDirToScreenAngle, angDiff, dist } from './util.js';
-import { ENEMIES, BOSSES, levelScale, levelDamageScale, COOP_ENEMY_HP, COOP_ENEMY_DMG, SHIELD } from './config.js';
-import { drawHumanoid, drawShadow, drawProjectile, drawShieldItem, INK } from './rig.js';
+import { ENEMIES, BOSSES, levelScale, levelDamageScale, COOP_ENEMY_HP, COOP_ENEMY_DMG, SHIELD, ENEMY_SPEED_MUL, HEAVY_HP_MUL, DIFFICULTY, AREA_WINDUP } from './config.js';
+import { drawHumanoid, drawShadow, drawProjectile, drawShieldItem, smoothFlip, INK } from './rig.js';
 import { sfx } from './audio.js';
 import { BEHAVIORS, LOOKS } from './behaviors.js';
 import { EXTRA } from './extras.js';
@@ -16,13 +16,15 @@ export class Enemy {
     const cfg = boss ? { ...boss, dmg: 1, speed: 2.8, range: 2.5, windup: 0.5, recover: 0.5, cooldown: 1 } : ENEMIES[type];
     this.cfg = cfg; this.name = cfg.name;
     const sc = boss ? 1 : levelScale(level);
-    this.hpMax = Math.round(cfg.hp * (boss ? 1 : sc)); this.hp = this.hpMax;
+    this.hpMax = Math.round(cfg.hp * (boss ? 1 : sc) * (!boss && cfg.heavy ? HEAVY_HP_MUL : 1)); this.hp = this.hpMax;
     this.dmgMul = boss ? 1 : levelDamageScale(level);
     if (!boss && g.players && g.players.length > 1) { // co-op: tougher enemies
       this.hpMax = Math.round(this.hpMax * COOP_ENEMY_HP); this.hp = this.hpMax;
       this.dmgMul *= COOP_ENEMY_DMG;
     }
-    this.speed = cfg.speed * (boss ? 1 : 1 + Math.min(0.25, level * 0.008));
+    if (!boss && g.levelInfo) this.dmgMul *= (DIFFICULTY[g.levelInfo.d] || DIFFICULTY[1]).dmg; // the route node's difficulty
+    this.windupMul = boss ? 1 : AREA_WINDUP[level > 30 ? 3 : Math.floor((level - 1) / 10)] || 1; // slower, easier to read charges early on
+    this.speed = cfg.speed * (boss ? 1 : ENEMY_SPEED_MUL * (1 + Math.min(0.25, level * 0.008)));
     this.r = cfg.r;
     this.x = x; this.y = y; this.z = 0;
     this.vx = 0; this.vy = 0; this.kvx = 0; this.kvy = 0;
@@ -117,7 +119,23 @@ export class Enemy {
   }
   halt(dt, rate = 12) { const k = Math.exp(-rate * dt); this.vx *= k; this.vy *= k; }
   windup(dur, tele, poseKind = 'windup', next = 'strike') {
+    dur *= this.windupMul || 1;
     this.state = 'windup'; this.t = dur; this.tDur = dur; this.tele = tele; this.pose = { kind: poseKind, t: 0 }; this.next = next;
+  }
+  // a dashing attack: hurts a player only inside the red lane it telegraphed, and only once the attacker has
+  // actually reached them (within reach of its body); without a lane it falls back to a circle around it
+  hurtInLane(reach, dmg, knock = 5) {
+    const L = this.lane;
+    if (!L) return this.hurtPlayerIfIn(reach, TAU, dmg, knock);
+    let any = false;
+    for (const p of this.g.players) {
+      if (!p.active) continue;
+      const dx = p.x - L.ox, dy = p.y - L.oy, along = dx * L.fx + dy * L.fy, side = Math.abs(dx * L.fy - dy * L.fx);
+      if (along < -0.3 || along > L.len + 0.2 || side > L.width / 2 + p.r * 0.6) continue; // outside the red lane
+      if (Math.hypot(p.x - this.x, p.y - this.y) > reach + p.r) continue; // not reached yet
+      if (p.hurt(dmg, this.x, this.y, knock)) { any = true; if (this.cfg.onHit) p.applyChill(this.cfg.onHit.chill, this.cfg.onHit.dur); }
+    }
+    return any;
   }
   hurtPlayerIfIn(range, arcRad, dmg, knock = 5) {
     let any = false;
@@ -152,7 +170,8 @@ export class Enemy {
       dt *= 1 - this.slow;
       if (Math.random() < dt * 5) g.particles.emit('dot', this.x + rand(-0.3, 0.3), this.y + rand(-0.3, 0.3), rand(0.3, 1.2), 0, 0, -0.3, 0.6, 1.6, '#cff4ff');
     }
-    this.flash = Math.max(0, this.flash - dt);
+    this.flash = Math.max(0, this.flash - dt); this.shudder = Math.max(0, (this.shudder || 0) - dt);
+    this.markT = Math.max(0, (this.markT || 0) - dt); this.rootT = Math.max(0, (this.rootT || 0) - dt);
     this.hitT = Math.max(0, this.hitT - dt);
     this.poiseT = Math.max(0, (this.poiseT || 0) - dt);
     this.atkCd -= dt;
@@ -184,6 +203,8 @@ export class Enemy {
       if (beh.trackDuringWindup && !locked) { const [dx, dy] = this.toPlayer(); this.face(dx, dy); if (this.tele && this.tele.track) this.tele.angle = Math.atan2(dy, dx); }
       if (this.t <= 0) {
         this.lastTele = this.tele; this.tele = null;
+        // a line telegraph becomes the lane the coming dash may hurt in (see hurtInLane)
+        const LT = this.lastTele; this.lane = LT && LT.kind === 'line' ? { ox: this.x, oy: this.y, fx: Math.cos(LT.angle), fy: Math.sin(LT.angle), len: LT.len, width: LT.width } : null;
         this.state = 'recover'; this.t = this.cfg.recover;
         this.pose = { kind: 'strike', t: 0.38, dur: 0.35 };
         if (X && this.next && this.next.startsWith('x:')) X.strike(this, g, this.next.slice(2));
@@ -228,7 +249,7 @@ export class Enemy {
     if (this.hidden) return;
     const iv = this.state === 'intro' ? this.introVis : null;
     if (iv && iv.hidden) return;
-    const sx = isoX(this.x, this.y), sy = isoY(this.x, this.y);
+    const sx = isoX(this.x, this.y) + (this.shudder > 0 && !this.dead ? Math.sin(t * 95 + (this.seed || 0)) * Math.min(1, this.shudder * 4) * 3 : 0), sy = isoY(this.x, this.y);
     let alpha = this.alpha, rot = 0, sqy = 1, sqx = 1;
     if (iv) { alpha = iv.alpha ?? 1; sqy = iv.sqy ?? 1; sqx = iv.sqx ?? 1; }
     if (this.dead && this.kneel) {
@@ -255,6 +276,7 @@ export class Enemy {
     Object.assign(o, { x: sx, y: sy, z: this.z * 32, facing, time: t + this.seed, walk: this.walk, move: this.dead ? 0 : this.moveAmt, flash: this.flash, alpha: alpha * (o.alphaMul || 1), rot, sqx, sqy, seed: this.seed, e: this });
     if (!o.pose) o.pose = this.pose;
     if (iv && iv.pose) o.pose = iv.pose;
+    if (!o.draw && !this.dead) o.flip = smoothFlip(this, facing, this.g.realTime);
     if (iv && iv.flap) o.flapSpeed = iv.flap;
     if (this.stun > 0 && !this.boss && !o.pose) o.pose = { kind: 'hurt', t: 0.3 };
     // shield: held on the facing side; behind the body when walking away from the camera
@@ -269,6 +291,20 @@ export class Enemy {
       ctx.save(); ctx.globalAlpha = 0.28;
       ctx.fillStyle = this.slowT > 0 ? '#9ee4ff' : '#8fe05a';
       ctx.beginPath(); ctx.ellipse(sx, sy - h * 0.5 - this.z * 32, 12 * Math.max(1, this.r * 2.5), h * 0.55, 0, 0, TAU); ctx.fill();
+      ctx.restore();
+    }
+    // harpoon: a rope coiled around the feet
+    if (this.rootT > 0 && !this.dead) {
+      ctx.save(); ctx.strokeStyle = '#8a6a3a'; ctx.lineWidth = 2.2; ctx.globalAlpha = Math.min(1, this.rootT * 3);
+      for (let i = 0; i < 3; i++) { ctx.beginPath(); ctx.ellipse(sx, sy - 4 - i * 4, 10 * Math.max(1, this.r * 2.5), 4, 0, 0, TAU); ctx.stroke(); }
+      ctx.restore();
+    }
+    // hunter's mark: a red reticle over the head
+    if (this.markT > 0 && !this.dead) {
+      const my = sy - h - 18 - this.z * 32, mr = 6 + Math.sin(t * 8) * 0.8;
+      ctx.save(); ctx.strokeStyle = 'rgba(230,50,40,0.95)'; ctx.lineWidth = 1.8; ctx.globalAlpha = Math.min(1, this.markT * 2);
+      ctx.beginPath(); ctx.arc(sx, my, mr, 0, TAU); ctx.stroke();
+      ctx.beginPath(); for (const [a, b] of [[0, 1], [1, 0], [0, -1], [-1, 0]]) { ctx.moveTo(sx + a * (mr - 3), my + b * (mr - 3)); ctx.lineTo(sx + a * (mr + 3), my + b * (mr + 3)); } ctx.stroke();
       ctx.restore();
     }
     // phase 3 oni lord aura
@@ -404,22 +440,46 @@ export function slamAt(g, x, y, r, dmg, src) {
   g.particles.burst('dust', x, y, 0.1, 18, 4, 0.8, 7, g.world.bi === 2 ? '#eef3fb' : '#bfa47c');
   g.particles.burst('shard', x, y, 0.1, 10, 5, 0.7, 3, '#5a4a40', { grav: 18, bounce: true });
   g.decals.add(x, y, r * 0.5, 'rgba(40,30,25,1)', 8);
-  for (const p of g.players) if (!p.dead && Math.hypot(p.x - x, p.y - y) < r + p.r) p.hurt(dmg, x, y, 7);
+  // only inside the telegraphed circle: the player's centre must be within r (a body just touching the edge is safe)
+  for (const p of g.players) if (!p.dead && Math.hypot(p.x - x, p.y - y) < r) p.hurt(dmg, x, y, 7);
 }
 
 // ---------------------------------------------------------------- projectiles & hazards
 // staff basic attack: small area burst damaging every enemy inside it
 function spiritBurst(g, q) {
-  sfx.zap();
-  g.fx.ring(q.x, q.y, q.burst, 'rgba(190,240,255,0.9)', 0.35, 5);
-  g.particles.burst('glow', q.x, q.y, 0.5, 14, 3, 0.5, 2.4, '#c8f0ff');
+  sfx.rin(0.95 + Math.random() * 0.1);
+  g.fx.spirit(q.x, q.y, q.burst, { kanji: '浄', dur: 0.85 });
+  g.particles.burst('glow', q.x, q.y, 0.5, 18, 3.2, 0.7, 2.4, '#fff2c0');
+  g.particles.burst('glow', q.x, q.y, 0.2, 10, 1.2, 1.1, 2, '#ffffff'); // slow wisps that linger
+  let hits = 0;
+  for (let i = 0; i < 8; i++) g.particles.emit('ember', q.x + (Math.random() - 0.5) * q.burst, q.y + (Math.random() - 0.5) * q.burst, 0.1, 0, 0, 1.2 + Math.random(), 0.9 + Math.random() * 0.6, 1.6, '#ffe7a0', { drag: 0.5 }); // motes rising out of the seal
   for (const e of g.enemies) {
     if (e.dead || e.state === 'spawn' || e.state === 'intro' || e.hidden) continue;
     const dx = e.x - q.x, dy = e.y - q.y, d = Math.hypot(dx, dy);
     if (d > q.burst + e.r) continue;
-    const { dmg, crit } = q.from.rollDamage(q.base);
+    const { dmg, crit } = q.from.rollDamage(q.base, q.weapon);
     g.damageEnemy(e, dmg, crit, dx / (d || 1), dy / (d || 1), 1, 0.05, { player: q.from, weapon: q.weapon });
+    hits++;
   }
+  if (hits) { g.shake(2); g.hitstop(0.03); } // a weighty burst
+  const KF = q.from.art && q.from.art(q.weapon, 'kiFlow'); // Ki Flow: each enemy hit gives ki
+  if (KF && hits) q.from.energy = Math.min(q.from.maxEnergy, q.from.energy + KF.perHit * hits);
+  if (q.pool && q.from.addPool) q.from.addPool(q.x, q.y, q.burst, q.pool, q.base, q.weapon); // Sacred Pool
+}
+
+// a ricocheting kunai turns toward the nearest enemy it hasn't hit yet (within q.bounceRange)
+function bounceProjectile(g, q, from) {
+  let best = null, bd = q.bounceRange || 4;
+  for (const o of g.enemies) {
+    if (o === from || o.dead || o.hidden || o.state === 'spawn' || o.state === 'intro' || (q.hit && q.hit.has(o))) continue;
+    const d = Math.hypot(o.x - from.x, o.y - from.y);
+    if (d < bd) { bd = d; best = o; }
+  }
+  if (!best) return false;
+  const sp = Math.hypot(q.vx, q.vy) || 10, dx = best.x - from.x, dy = best.y - from.y, l = Math.hypot(dx, dy) || 1;
+  q.x = from.x; q.y = from.y; q.vx = (dx / l) * sp; q.vy = (dy / l) * sp; q.life = l / sp + 0.2; q.bounce--;
+  g.particles.burst('spark', from.x, from.y, 0.6, 4, 4, 0.15, 1, '#ffe6a0');
+  return true;
 }
 
 function nearestPlayer(g, x, y) {
@@ -486,7 +546,8 @@ export function updateProjectiles(g, dt) {
     q.x += q.vx * dt; q.y += q.vy * dt;
     q.screenAng = q.kind === 'crescent' ? (q.spin = (q.spin || 0) + dt * 18) : worldDirToScreenAngle(q.vx, q.vy);
     if (q.glow && Math.random() < 0.8) g.particles.emit('glow', q.x, q.y, q.z, 0, 0, 0, 0.25, 2, q.kind === 'spirit' ? '#c8f0ff' : '#ffe6a0');
-    const blocked = g.world.blocked(q.x, q.y, 0.02);
+    if (q.kind === 'ofuda' && Math.random() < 0.5) g.particles.emit('ember', q.x, q.y, q.z, (Math.random() - 0.5) * 0.6, (Math.random() - 0.5) * 0.6, 0.6, 0.5, 1.4, Math.random() < 0.5 ? '#ffe7a0' : '#ffffff');
+    const blocked = g.world.blocked(q.x, q.y, 0.02, true); // (shots fly over water)
     if (q.life <= 0 || blocked) {
       q.dead = true;
       if (q.burst) spiritBurst(g, q);
@@ -504,10 +565,12 @@ export function updateProjectiles(g, dt) {
       for (const e of g.enemies) {
         if (e.dead || e.state === 'spawn' || e.state === 'intro' || e.hidden || (q.hit && q.hit.has(e))) continue;
         if (Math.hypot(e.x - q.x, e.y - q.y) < e.r + q.r + (e.flying ? 0.3 : 0)) {
-          const { dmg, crit } = q.from.rollDamage(q.base);
+          const { dmg, crit } = q.from.rollDamage(q.base, q.weapon, !!q.forceCrit);
           const l = Math.hypot(q.vx, q.vy) || 1;
-          g.damageEnemy(e, dmg, crit, q.vx / l, q.vy / l, q.knock || 1.5, 0.1, { player: q.from, weapon: q.weapon });
+          g.damageEnemy(e, dmg, crit, q.vx / l, q.vy / l, q.knock || 1.5, 0.1, { player: q.from, weapon: q.weapon, sound: q.sound, shudder: q.shudder, mark: q.mark, markMul: q.markMul, entangle: q.entangle, bossSlow: q.bossSlow });
+          if (q.sparks) g.particles.burst('spark', e.x, e.y, 0.6, 4, 6, 0.16, 1, '#ffd890');
           (q.hit || (q.hit = new Set())).add(e);
+          if (q.bounce > 0 && bounceProjectile(g, q, e)) break; // ricochet: on to the next enemy
           if (q.pierce > 0) q.pierce--; else { q.dead = true; break; }
         }
       }

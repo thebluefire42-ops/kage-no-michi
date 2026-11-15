@@ -65,12 +65,111 @@ function drawArbalest(ctx, pal, metal, extra) {
 
 // ---------------- Weapons ----------------
 // Drawn in a rotated frame: hand at origin, +x along the weapon.
+// The Shishi shield (round lacquered war shield): a black lacquer disc, a broad gold border of foliate scrolls,
+// a thin gold rope-twist ring, a red heater crest with a rampant gold lion under a plumed helm, gold acanthus
+// flaring around it and four bronze scallop-shell bosses. Small sizes get a simple version: the disc, a gold
+// ring, the red crest and four dots. glow (0..1): the rim lights up (Bulwark).
+export function drawShishiShield(ctx, R, glow = 0) {
+  const m = ctx.getTransform(), simple = R * Math.hypot(m.a, m.b) < 26;
+  const GOLD = '#d9b24c', GOLD2 = '#f2d684', RED = '#b8281e', BRONZE = '#7a6243', DARK = '#3a2a14';
+  ctx.fillStyle = '#17120f'; ctx.beginPath(); ctx.arc(0, 0, R, 0, TAU); ctx.fill();
+  const crest = (s) => {
+    const w = R * 0.42 * s, h = R * 0.5 * s;
+    ctx.beginPath(); ctx.moveTo(-w / 2, -h * 0.5); ctx.lineTo(w / 2, -h * 0.5); ctx.lineTo(w / 2, h * 0.1);
+    ctx.quadraticCurveTo(w / 2, h * 0.42, 0, h * 0.56); ctx.quadraticCurveTo(-w / 2, h * 0.42, -w / 2, h * 0.1); ctx.closePath();
+  };
+  const rim = () => {
+    if (glow > 0) { ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.strokeStyle = `rgba(255,205,110,${Math.min(1, glow)})`; ctx.lineWidth = R * 0.24; ctx.beginPath(); ctx.arc(0, 0, R * 0.9, 0, TAU); ctx.stroke(); ctx.restore(); }
+    ctx.strokeStyle = '#05040a'; ctx.lineWidth = Math.max(0.8, R * 0.05); ctx.beginPath(); ctx.arc(0, 0, R, 0, TAU); ctx.stroke();
+  };
+  if (simple) {
+    ctx.strokeStyle = GOLD; ctx.lineWidth = R * 0.15; ctx.beginPath(); ctx.arc(0, 0, R * 0.8, 0, TAU); ctx.stroke();
+    crest(1.15); ctx.fillStyle = RED; ctx.fill(); ctx.strokeStyle = GOLD; ctx.lineWidth = R * 0.05; ctx.stroke();
+    ctx.fillStyle = BRONZE; for (const [x, y] of [[-0.42, -0.24], [0.42, -0.24], [-0.36, 0.36], [0.36, 0.36]]) { ctx.beginPath(); ctx.arc(x * R, y * R, R * 0.085, 0, TAU); ctx.fill(); }
+    rim(); return;
+  }
+  // a soft lacquer sheen
+  const sh = ctx.createRadialGradient(-R * 0.35, -R * 0.4, 0, -R * 0.35, -R * 0.4, R * 1.1);
+  sh.addColorStop(0, 'rgba(255,240,220,0.13)'); sh.addColorStop(1, 'rgba(255,240,220,0)');
+  ctx.fillStyle = sh; ctx.beginPath(); ctx.arc(0, 0, R, 0, TAU); ctx.fill();
+  // broad gold border: foliate scrolls between two thin gold lines
+  ctx.strokeStyle = GOLD; ctx.lineWidth = R * 0.022;
+  for (const r of [0.95, 0.77]) { ctx.beginPath(); ctx.arc(0, 0, R * r, 0, TAU); ctx.stroke(); }
+  const N = 14;
+  for (let i = 0; i < N; i++) {
+    ctx.save(); ctx.rotate((i / N) * TAU); ctx.translate(R * 0.86, 0); ctx.rotate(Math.PI / 2);
+    ctx.strokeStyle = GOLD; ctx.lineWidth = R * 0.018;
+    ctx.beginPath(); ctx.moveTo(-R * 0.13, R * 0.01); ctx.bezierCurveTo(-R * 0.06, -R * 0.07, R * 0.02, R * 0.06, R * 0.11, -R * 0.01); ctx.stroke();
+    ctx.beginPath(); ctx.arc(-R * 0.13, -R * 0.015, R * 0.025, 0, TAU * 0.8); ctx.stroke();
+    ctx.fillStyle = GOLD2; ctx.beginPath(); ctx.ellipse(-R * 0.01, -R * 0.035, R * 0.04, R * 0.016, -0.5, 0, TAU); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(R * 0.06, R * 0.03, R * 0.035, R * 0.014, 0.6, 0, TAU); ctx.fill();
+    if (i % 3 === 0) { ctx.fillStyle = RED; ctx.beginPath(); ctx.arc(R * 0.03, -R * 0.005, R * 0.014, 0, TAU); ctx.fill(); }
+    ctx.restore();
+  }
+  // thin rope-twist ring
+  ctx.strokeStyle = GOLD; ctx.lineWidth = R * 0.01;
+  for (const r of [0.73, 0.68]) { ctx.beginPath(); ctx.arc(0, 0, R * r, 0, TAU); ctx.stroke(); }
+  ctx.beginPath();
+  for (let i = 0; i < 60; i++) { const a = (i / 60) * TAU; ctx.moveTo(Math.cos(a) * R * 0.68, Math.sin(a) * R * 0.68); ctx.lineTo(Math.cos(a + 0.05) * R * 0.73, Math.sin(a + 0.05) * R * 0.73); }
+  ctx.stroke();
+  // gold acanthus leaves flaring around the crest (red tips)
+  const leaf = (x, y, a, len) => {
+    ctx.save(); ctx.translate(x, y); ctx.rotate(a);
+    ctx.fillStyle = GOLD; ctx.beginPath(); ctx.moveTo(0, 0);
+    ctx.quadraticCurveTo(len * 0.35, -len * 0.42, len * 0.62, -len * 0.18); ctx.lineTo(len * 0.7, -len * 0.3); ctx.quadraticCurveTo(len * 0.85, -len * 0.12, len, -len * 0.14);
+    ctx.quadraticCurveTo(len * 0.6, len * 0.22, 0, 0); ctx.fill();
+    ctx.strokeStyle = DARK; ctx.lineWidth = R * 0.008; ctx.beginPath(); ctx.moveTo(len * 0.05, 0); ctx.quadraticCurveTo(len * 0.5, -len * 0.08, len * 0.92, -len * 0.12); ctx.stroke();
+    ctx.fillStyle = RED; ctx.beginPath(); ctx.arc(len * 0.98, -len * 0.14, R * 0.018, 0, TAU); ctx.fill();
+    ctx.restore();
+  };
+  for (const sd of [-1, 1]) {
+    ctx.save(); ctx.scale(sd, 1);
+    leaf(R * 0.1, -R * 0.3, -0.55, R * 0.36); leaf(R * 0.16, -R * 0.08, -0.1, R * 0.38); leaf(R * 0.16, R * 0.14, 0.45, R * 0.34); leaf(R * 0.08, R * 0.3, 1.05, R * 0.26);
+    ctx.restore();
+  }
+  // a plumed helm above the crest
+  ctx.strokeStyle = GOLD2; ctx.lineWidth = R * 0.02;
+  for (let i = -2; i <= 2; i++) { ctx.beginPath(); ctx.moveTo(0, -R * 0.42); ctx.quadraticCurveTo(i * R * 0.04, -R * 0.52, i * R * 0.07, -R * 0.56); ctx.stroke(); }
+  ctx.fillStyle = '#9a9aa0'; ctx.beginPath(); ctx.ellipse(0, -R * 0.37, R * 0.07, R * 0.065, 0, 0, TAU); ctx.fill();
+  // the red heater crest with its rampant gold lion
+  crest(1); ctx.fillStyle = RED; ctx.fill(); ctx.strokeStyle = GOLD; ctx.lineWidth = R * 0.02; ctx.stroke();
+  ctx.save(); ctx.translate(0, -R * 0.02); const s = R * 0.17;
+  ctx.fillStyle = GOLD; ctx.strokeStyle = DARK; ctx.lineWidth = s * 0.06; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.ellipse(s * 0.1, s * 0.12, s * 0.5, s * 0.26, -0.95, 0, TAU); ctx.fill(); ctx.stroke(); // rearing body
+  ctx.lineWidth = s * 0.16; ctx.strokeStyle = GOLD;
+  ctx.beginPath(); ctx.moveTo(-s * 0.12, -s * 0.22); ctx.lineTo(-s * 0.55, -s * 0.38); ctx.moveTo(-s * 0.1, -s * 0.05); ctx.lineTo(-s * 0.52, -s * 0.02); // raised forepaws
+  ctx.moveTo(s * 0.32, s * 0.36); ctx.lineTo(s * 0.12, s * 0.82); ctx.moveTo(s * 0.4, s * 0.3); ctx.lineTo(s * 0.52, s * 0.78); ctx.stroke(); // hind legs
+  ctx.lineWidth = s * 0.07; ctx.beginPath(); ctx.moveTo(s * 0.48, s * 0.1); ctx.quadraticCurveTo(s * 0.95, -s * 0.05, s * 0.66, -s * 0.48); ctx.stroke(); // tail
+  ctx.beginPath(); ctx.arc(s * 0.64, -s * 0.52, s * 0.08, 0, TAU); ctx.fillStyle = GOLD; ctx.fill();
+  ctx.beginPath(); ctx.arc(-s * 0.26, -s * 0.56, s * 0.22, 0, TAU); ctx.fillStyle = GOLD; ctx.fill(); ctx.strokeStyle = DARK; ctx.lineWidth = s * 0.06; ctx.stroke(); // head and mane
+  ctx.fillStyle = DARK; ctx.beginPath(); ctx.moveTo(-s * 0.46, -s * 0.56); ctx.lineTo(-s * 0.3, -s * 0.5); ctx.lineTo(-s * 0.46, -s * 0.46); ctx.fill(); // open mouth
+  ctx.restore();
+  // four bronze scallop-shell bosses
+  for (const [x, y] of [[-0.42, -0.24], [0.42, -0.24], [-0.36, 0.36], [0.36, 0.36]]) {
+    const r = R * 0.075;
+    ctx.save(); ctx.translate(x * R, y * R);
+    ctx.fillStyle = BRONZE; ctx.beginPath(); ctx.arc(0, r * 0.1, r, Math.PI, 0); ctx.lineTo(r * 0.3, r * 0.75); ctx.lineTo(-r * 0.3, r * 0.75); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = '#3a2c1a'; ctx.lineWidth = r * 0.12; ctx.stroke();
+    ctx.beginPath(); for (let k = 0; k < 5; k++) { const a = Math.PI + (k + 0.5) / 5 * Math.PI; ctx.moveTo(0, r * 0.6); ctx.lineTo(Math.cos(a) * r * 0.9, r * 0.1 + Math.sin(a) * r * 0.9); } ctx.stroke();
+    ctx.fillStyle = 'rgba(255,230,180,0.35)'; ctx.beginPath(); ctx.arc(-r * 0.3, -r * 0.3, r * 0.25, 0, TAU); ctx.fill();
+    ctx.restore();
+  }
+  rim();
+}
+
 export function drawWeapon(ctx, kind, hx, hy, ang, pal, extra = 0) {
   ctx.save();
   ctx.translate(hx, hy); ctx.rotate(ang);
   ctx.lineJoin = 'round';
   const metal = pal.metal || '#dfe6ee';
   switch (kind) {
+    // the Shishi shield: held edge-on (an ellipse), flatter on the back, round as an icon; extra = rim glow
+    case 'shield': case 'shield_back': case 'shield_icon': {
+      ctx.rotate(-ang);
+      ctx.scale(kind === 'shield' ? 0.6 : kind === 'shield_back' ? 0.82 : 1, 1);
+      drawShishiShield(ctx, kind === 'shield' ? 13 : kind === 'shield_back' ? 11.5 : 13, extra);
+      break;
+    }
     case 'katana': { // slim, slightly curved blade with a small dark tsuba and a wrapped grip
       ctx.fillStyle = INK; ctx.fillRect(-7.5, -1.25, 8.5, 2.5);
       ctx.fillStyle = 'rgba(230,220,200,0.55)'; for (let x = -6.5; x < 0; x += 2.2) ctx.fillRect(x, -0.8, 0.9, 1.6); // ito wrap
@@ -122,6 +221,19 @@ export function drawWeapon(ctx, kind, hx, hy, ang, pal, extra = 0) {
     case 'crossbow': { // heavy arbalest: thick banded stock, steel prod, foot stirrup (drawn a bit compact)
       ctx.scale(0.82, 0.82);
       drawArbalest(ctx, pal, metal, extra);
+      break;
+    }
+    case 'kunai_volley': { // three kunai flying side by side in an arrowhead, each with motion streaks behind it
+      for (const [dx, dy] of [[-5, -7], [0, 0], [-5, 7]]) {
+        ctx.save(); ctx.translate(dx, dy);
+        ctx.lineCap = 'round';
+        for (const [sy, len, a] of [[-1.2, 10, 0.45], [0, 15, 0.7], [1.2, 8, 0.35]]) { // speed lines
+          ctx.strokeStyle = `rgba(235,240,250,${a})`; ctx.lineWidth = 0.8;
+          ctx.beginPath(); ctx.moveTo(-8, sy); ctx.lineTo(-8 - len, sy); ctx.stroke();
+        }
+        drawWeapon(ctx, 'kunai', 0, 0, 0, pal);
+        ctx.restore();
+      }
       break;
     }
     case 'kunai': {
@@ -191,12 +303,36 @@ export function drawWeapon(ctx, kind, hx, hy, ang, pal, extra = 0) {
       ctx.fillStyle = '#f0d070'; ctx.beginPath(); ctx.arc(31.5, 0, 1.3, 0, TAU); ctx.fill(); // jewel
       ctx.lineWidth = 0.9; ctx.strokeStyle = '#e8c870';
       for (const [rx, ry] of [[27.5, -5.2], [31, -6.2], [34.5, -5], [27.5, 5.2], [31, 6.2], [34.5, 5]]) { ctx.beginPath(); ctx.arc(rx, ry + Math.sign(ry) * 1.2, 1.5, 0, TAU); ctx.stroke(); }
-      // ofuda: a paper talisman hanging from the collar under the head
-      ctx.strokeStyle = 'rgba(40,30,20,0.9)'; ctx.lineWidth = 0.6; ctx.beginPath(); ctx.moveTo(23.5, 1); ctx.lineTo(22.5, 4); ctx.stroke();
-      ctx.save(); ctx.translate(22.5, 4); ctx.rotate(0.15);
-      ctx.fillStyle = '#f2ead8'; ctx.fillRect(-1.6, 0, 3.2, 9); ctx.strokeStyle = INK; ctx.lineWidth = 0.5; ctx.strokeRect(-1.6, 0, 3.2, 9);
-      ctx.fillStyle = '#b52a22'; ctx.fillRect(-0.9, 1.2, 1.8, 1.8); ctx.fillRect(-0.4, 3.6, 0.8, 4);
-      ctx.restore();
+      break;
+    }
+    case 'spiritorb': { // a scholar's floating blue spirit orb, held out in the hand
+      ctx.save(); ctx.globalCompositeOperation = 'lighter';
+      const og = ctx.createRadialGradient(6, 0, 0, 6, 0, 13); og.addColorStop(0, 'rgba(170,220,255,0.75)'); og.addColorStop(1, 'rgba(120,180,255,0)');
+      ctx.fillStyle = og; ctx.beginPath(); ctx.arc(6, 0, 13, 0, TAU); ctx.fill(); ctx.restore();
+      ctx.fillStyle = '#5aa8ff'; ctx.strokeStyle = INK; ctx.lineWidth = 1.4; ctx.beginPath(); ctx.arc(6, 0, 5.5, 0, TAU); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#e8f6ff'; ctx.beginPath(); ctx.arc(4.4, -1.8, 1.8, 0, TAU); ctx.fill();
+      break;
+    }
+    case 'holystaff': { // the player's Holy Staff: an ivory-white shaft wound with gold, a radiant gold finial
+      ctx.save(); ctx.globalCompositeOperation = 'lighter'; // warm holy light around the head
+      const hg = ctx.createRadialGradient(31, 0, 0, 31, 0, 14);
+      hg.addColorStop(0, 'rgba(255,236,160,0.7)'); hg.addColorStop(0.5, 'rgba(255,220,120,0.25)'); hg.addColorStop(1, 'rgba(255,220,120,0)');
+      ctx.fillStyle = hg; ctx.beginPath(); ctx.arc(31, 0, 14, 0, TAU); ctx.fill(); ctx.restore();
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = INK; ctx.lineWidth = 3.2; ctx.beginPath(); ctx.moveTo(-17, 0); ctx.lineTo(25, 0); ctx.stroke();
+      ctx.strokeStyle = '#f6f1e2'; ctx.lineWidth = 1.9; ctx.beginPath(); ctx.moveTo(-17, 0); ctx.lineTo(25, 0); ctx.stroke(); // white shaft
+      ctx.strokeStyle = '#d8a838'; ctx.lineWidth = 0.9; // a gold ribbon wound around it
+      for (let x = -14; x < 22; x += 4) { ctx.beginPath(); ctx.moveTo(x, 1); ctx.lineTo(x + 2.2, -1); ctx.stroke(); }
+      ctx.fillStyle = '#f0c850'; for (const x of [-17.5, 8, 23]) { ctx.fillRect(x, -1.7, 2, 3.4); } // gold collars
+      ctx.strokeStyle = INK; ctx.lineWidth = 2.6;
+      const loop = () => { ctx.beginPath(); ctx.moveTo(25, 0); ctx.bezierCurveTo(27, -7.5, 34, -7.5, 36, -2.5); ctx.lineTo(38.5, 0); ctx.lineTo(36, 2.5); ctx.bezierCurveTo(34, 7.5, 27, 7.5, 25, 0); };
+      loop(); ctx.stroke(); loop(); ctx.strokeStyle = '#f4cc58'; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.strokeStyle = '#fff4c8'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(25, 0); ctx.lineTo(37, 0); ctx.stroke();
+      ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(31.5, 0, 1.6, 0, TAU); ctx.fill(); // a white jewel
+      ctx.strokeStyle = 'rgba(255,240,180,0.85)'; ctx.lineWidth = 0.8; // small rays from the jewel
+      for (let k = 0; k < 8; k++) { const a = (k / 8) * TAU; ctx.beginPath(); ctx.moveTo(31.5 + Math.cos(a) * 2.6, Math.sin(a) * 2.6); ctx.lineTo(31.5 + Math.cos(a) * 4, Math.sin(a) * 4); ctx.stroke(); }
+      ctx.lineWidth = 0.9; ctx.strokeStyle = '#f4d070';
+      for (const [rx, ry] of [[27.5, -5.2], [31, -6.2], [34.5, -5], [27.5, 5.2], [31, 6.2], [34.5, 5]]) { ctx.beginPath(); ctx.arc(rx, ry + Math.sign(ry) * 1.2, 1.5, 0, TAU); ctx.stroke(); }
       break;
     }
     case 'bo': { // long wooden fighting stick with bound ends; extra = slide along the stick
@@ -208,6 +344,11 @@ export function drawWeapon(ctx, kind, hx, hy, ang, pal, extra = 0) {
       ctx.strokeStyle = 'rgba(255,220,180,0.35)'; ctx.lineWidth = 0.5; ctx.beginPath(); ctx.moveTo(-20, -0.4); ctx.lineTo(30, -0.4); ctx.stroke();
       ctx.fillStyle = '#1a1210';
       for (const x of [-19, 29]) ctx.fillRect(x, -1.2, 1, 2.4);
+      // the grip: cloth tape wound round the middle, where the hands go
+      ctx.fillStyle = '#d8ccae'; ctx.fillRect(-1, -1.55, 12, 3.1);
+      ctx.strokeStyle = INK; ctx.lineWidth = 0.5; ctx.strokeRect(-1, -1.55, 12, 3.1);
+      ctx.strokeStyle = 'rgba(90,70,40,0.75)'; ctx.lineWidth = 0.45;
+      for (let x = 0; x < 11; x += 1.7) { ctx.beginPath(); ctx.moveTo(x, 1.55); ctx.lineTo(x + 1.2, -1.55); ctx.stroke(); }
       break;
     }
     case 'flute': { // shakuhachi
@@ -530,6 +671,7 @@ function solvePose(o, aimL) {
       P.f1 = 1.15 - swing * 0.25; P.f2 = 0.15 - swing * 0.1;
       P.lean += 0.06;
     }
+    else if (grip === 'shield') { P.f1 = 0.55 + swing * 0.2; P.f2 = -0.15; P.fW = 0; P.n1 = 1.2 - swing * 0.3; P.n2 = 0.9 - swing * 0.3; }
     else { P.nW = P.n2 + 0.35; }
     if (o.weapon2) P.fW = grip === 'dual' ? P.f2 + Math.PI - 0.35 : P.f2 + 0.35;
   }
@@ -585,6 +727,38 @@ function solvePose(o, aimL) {
     case 'slam': {
       const a = t < 0.55 ? lerp(1.0, -2.7, ease.outCubic(t / 0.55)) : lerp(-2.7, aimL + 1.3, ease.outCubic((t - 0.55) / 0.45));
       P.n1 = a; P.n2 = a - 0.15; P.nW = a - 0.1; P.f1 = a + 0.2; P.f2 = a; P.twoHand = true; P.tuck = t < 0.55 ? Math.sin(t / 0.55 * Math.PI) : 0;
+      break;
+    }
+    // heavy sword (player): a deep wind-up (crouch, lean back, blade far behind the head), then a falling cleave
+    case 'heavyCleave': {
+      const W = 0.4, sm = (x) => x * x * (3 - 2 * x);
+      const k = t < W ? sm(t / W) : 1, k2 = t < W ? 0 : ease.outCubic(Math.min(1, (t - W) / 0.22));
+      const a = t < W ? lerp(P.n1, -2.5, k) : lerp(-2.5, aimL + 1.4, k2);
+      P.n1 = a; P.n2 = a - 0.2; P.nW = a - 0.1; P.f1 = a + 0.25; P.f2 = a; P.twoHand = true;
+      P.lean += t < W ? -0.24 * k : lerp(-0.24, 0.34, k2);
+      P.tuck = t < W ? 0.35 * k : 0.35 * (1 - k2) + 0.3 * Math.sin(k2 * Math.PI);
+      break;
+    }
+    // heavy sword held back while charging (t = charge 0..1, raise = 0..1 lifting it into place); trembles when full
+    case 'heavyCharge': {
+      const r = ease.outCubic(clamp(pose.raise ?? 1, 0, 1));
+      const shake = t >= 0.999 ? Math.sin((o.time || 0) * 70) * 0.05 : Math.sin((o.time || 0) * 40) * 0.015 * t;
+      const a = lerp(P.n1, -2.15 - 0.2 * t, r) + shake; // blade raised up behind the head
+      P.n1 = a; P.n2 = a - 0.2; P.nW = a - 0.1; P.f1 = a + 0.25; P.f2 = a; P.twoHand = true;
+      P.lean -= (0.22 + 0.1 * t) * r; P.tuck = (0.3 + 0.3 * t) * r;
+      break;
+    }
+    // shishi shield: bash (shield thrust forward, shoulder behind it) and Bulwark (crouched behind it)
+    case 'shieldBash': {
+      const k = t < 0.5 ? ease.outCubic(t / 0.5) : 1 - (t - 0.5) * 0.6;
+      P.f1 = lerp(0.55, 0.05, k); P.f2 = lerp(-0.15, -0.05, k); P.n1 = lerp(1.2, 0.4, k); P.n2 = lerp(0.9, 0.1, k);
+      P.lean += 0.32 * k; P.tuck = 0.15 * k;
+      break;
+    }
+    case 'shieldGuard': {
+      const brace = Math.min(1, t * 8);
+      P.f1 = lerp(0.55, 0.35, brace); P.f2 = lerp(-0.15, -0.35, brace); P.n1 = 0.7; P.n2 = -0.1;
+      P.lean += 0.14 * brace; P.tuck = 0.65 * brace;
       break;
     }
     case 'cast': {
@@ -657,6 +831,19 @@ function drawWings(ctx, t, sx, sy, flap) {
 }
 
 // ---------------- Humanoid ----------------
+// A character's left/right mirror eases over ~0.1 s instead of snapping, with a little hysteresis so
+// aiming straight up or down doesn't make it flicker. obj keeps the state; returns the x scale (-1..1).
+export function smoothFlip(obj, facing, now) {
+  const c = Math.cos(facing);
+  if (obj.flipWant === undefined) obj.flipWant = c >= 0 ? 1 : -1;
+  if (c > 0.12) obj.flipWant = 1; else if (c < -0.12) obj.flipWant = -1;
+  const dt = clamp(now - (obj.flipAt ?? now), 0, 0.1); obj.flipAt = now;
+  const v = obj.flipS ?? obj.flipWant, step = dt / 0.1;
+  obj.flipS = v < obj.flipWant ? Math.min(obj.flipWant, v + step * 2) : Math.max(obj.flipWant, v - step * 2);
+  const f = obj.flipS;
+  return Math.sign(f || 1) * Math.max(0.12, Math.abs(f));
+}
+
 export function drawHumanoid(ctx, o) {
   const t = o.time || 0;
   const pal = o.flash > 0 ? FLASH : o.pal;
@@ -672,7 +859,7 @@ export function drawHumanoid(ctx, o) {
   ctx.save();
   ctx.translate(o.x, o.y - (o.z || 0));
   if (o.alpha !== undefined) ctx.globalAlpha *= o.alpha;
-  ctx.scale(dir * s * (o.sqx || 1), s * (o.sqy || 1));
+  ctx.scale((o.flip ?? dir) * s * (o.sqx || 1), s * (o.sqy || 1)); // o.flip: an eased mirror (see smoothFlip)
   if (o.rot) { ctx.translate(0, -15); ctx.rotate(o.rot); ctx.translate(0, 15); }
   if (P.drop) ctx.translate(0, P.drop);
 
@@ -728,6 +915,7 @@ export function drawHumanoid(ctx, o) {
     const bx = onBack ? 3 + lx * 0.8 : 0;
     if (bw === 'saya_long') drawWeapon(ctx, bw, bx - 1 + lx * 0.7, shY + 1, onBack ? 1.9 : 2.3, pal);   // across the back, hilt over the shoulder
     else if (bw === 'saya') { drawWeapon(ctx, bw, -1, hipY - 1, 2.75, pal); drawWeapon(ctx, bw, 0.5, hipY + 1, 2.9, pal); } // at the hip
+    else if (bw === 'shield_back') drawWeapon(ctx, bw, onBack ? bx + 1 : -4 + lx * 0.5, shY + 9, 0, pal); // slung flat across the back
     else if (bw === 'crossbow_back') drawWeapon(ctx, bw, onBack ? bx - 4 + lx * 0.7 : -8 + lx * 0.7, onBack ? shY + 12 : shY + 15, onBack ? -1.45 : -1.75, pal); // strapped upright on the back
     else drawWeapon(ctx, bw, -6 + lx * 0.6, shY + 10, 2.3, pal);
   };
@@ -747,7 +935,9 @@ export function drawHumanoid(ctx, o) {
   }
 
   // far arm (behind body)
-  drawArm(shF, P.f1, P.f2, o.weapon2 || (P.twoHand ? null : null), P.fW, false);
+  const farHand = drawArm(shF, P.f1, P.f2, o.weapon2 || (P.twoHand ? null : null), P.fW, false);
+  const drawHeldShield = () => drawWeapon(ctx, 'shield', farHand[0] + 2.5, farHand[1] - 1, 0, pal, o.shieldGlow || 0);
+  if (o.weapon === 'shield' && back) drawHeldShield();
 
   // legs
   const legSwing = Math.sin(w) * 0.75 * mv;
@@ -832,8 +1022,9 @@ export function drawHumanoid(ctx, o) {
   // head
   drawHead(ctx, o.head || 'hood', 1 + lx * 1.1, shY - 6.5, pal, back, t, o);
 
+  if (o.weapon === 'shield' && !back) drawHeldShield();
   // near arm (in front of body)
-  drawArm(shN, P.n1, P.n2, o.weapon, P.nW, true);
+  drawArm(shN, P.n1, P.n2, o.weapon === 'shield' ? null : o.weapon, P.nW, true);
 
   ctx.restore();
 }
@@ -881,6 +1072,7 @@ export function drawKappa(ctx, o) {
 // ---------------- Projectiles ----------------
 export function drawProjectile(ctx, p, sx, sy, t) {
   const ang = p.screenAng;
+  if (p.reflected) { ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = 'rgba(255,200,90,0.35)'; ctx.beginPath(); ctx.arc(sx, sy, 11 + Math.sin(t * 30) * 2, 0, TAU); ctx.fill(); ctx.restore(); }
   ctx.save(); ctx.translate(sx, sy); ctx.rotate(ang);
   switch (p.kind) {
     case 'bolt':
@@ -889,10 +1081,21 @@ export function drawProjectile(ctx, p, sx, sy, t) {
       ctx.fillStyle = '#e8eef5'; ctx.beginPath(); ctx.moveTo(6, -2.5); ctx.lineTo(12, 0); ctx.lineTo(6, 2.5); ctx.fill();
       ctx.fillStyle = '#c33'; ctx.fillRect(-15, -2.5, 4, 5);
       break;
+    case 'heavybolt': // the crossbow's piercing shot: a thick bolt with a broad head and a long glowing wake
+      ctx.save(); ctx.globalCompositeOperation = 'lighter';
+      ctx.strokeStyle = 'rgba(255,220,140,0.35)'; ctx.lineWidth = 8; ctx.beginPath(); ctx.moveTo(-60, 0); ctx.lineTo(0, 0); ctx.stroke();
+      ctx.strokeStyle = 'rgba(255,250,220,0.7)'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(-44, 0); ctx.lineTo(4, 0); ctx.stroke();
+      ctx.restore();
+      ctx.strokeStyle = '#4a3420'; ctx.lineWidth = 3.4; ctx.beginPath(); ctx.moveTo(-18, 0); ctx.lineTo(8, 0); ctx.stroke();
+      ctx.fillStyle = '#eef3f8'; ctx.beginPath(); ctx.moveTo(7, -4.2); ctx.lineTo(17, 0); ctx.lineTo(7, 4.2); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = INK; ctx.lineWidth = 1; ctx.stroke();
+      ctx.fillStyle = '#c33'; ctx.fillRect(-20, -3.5, 5, 7);
+      break;
     case 'kunai':
+      ctx.strokeStyle = 'rgba(255,248,225,0.35)'; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(-22, 0); ctx.lineTo(-4, 0); ctx.stroke(); // speed streak
       ctx.rotate(t * 30);
       ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(0, 0, 7, 0, TAU); ctx.stroke();
-      ctx.fillStyle = '#9aa3ad'; ctx.beginPath(); ctx.moveTo(-6, 0); ctx.lineTo(0, -2.5); ctx.lineTo(8, 0); ctx.lineTo(0, 2.5); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = p.golden ? '#ffd060' : '#9aa3ad'; ctx.beginPath(); ctx.moveTo(-6, 0); ctx.lineTo(0, -2.5); ctx.lineTo(8, 0); ctx.lineTo(0, 2.5); ctx.closePath(); ctx.fill();
       ctx.strokeStyle = INK; ctx.lineWidth = 1; ctx.stroke();
       break;
     case 'arrow':
@@ -914,6 +1117,20 @@ export function drawProjectile(ctx, p, sx, sy, t) {
       blob(ctx, 0, 0, 4.6, p.kind === 'jug' ? '#d8c8a0' : '#8a4a2a');
       if (p.kind === 'firejar') { ctx.fillStyle = Math.random() > 0.5 ? '#ffd35a' : '#ff6a2a'; ctx.beginPath(); ctx.arc(0, -5, 2.4, 0, TAU); ctx.fill(); }
       else { ctx.fillStyle = '#2a2030'; ctx.fillRect(-1.5, -6, 3, 2); }
+      break;
+    }
+    case 'ofuda': { // the monk's paper talisman, wrapped in a pale golden flame
+      ctx.save(); ctx.globalCompositeOperation = 'lighter';
+      const pulse = 1 + Math.sin(t * 16 + (p.seed || 0)) * 0.12;
+      const gl = ctx.createRadialGradient(0, 0, 0, 0, 0, 15 * pulse);
+      gl.addColorStop(0, 'rgba(255,240,190,0.6)'); gl.addColorStop(1, 'rgba(255,210,120,0)');
+      ctx.fillStyle = gl; ctx.beginPath(); ctx.arc(0, 0, 15 * pulse, 0, TAU); ctx.fill();
+      ctx.fillStyle = 'rgba(255,225,150,0.35)'; ctx.beginPath(); ctx.moveTo(-6, -5); ctx.quadraticCurveTo(-20, 0, -6, 5); ctx.fill(); // flame tail
+      ctx.restore();
+      ctx.rotate(Math.PI / 2 + Math.sin(t * 22 + (p.seed || 0)) * 0.18); // the paper flutters as it flies
+      ctx.fillStyle = '#f6eedb'; ctx.fillRect(-3.4, -7.5, 6.8, 15); ctx.strokeStyle = INK; ctx.lineWidth = 0.8; ctx.strokeRect(-3.4, -7.5, 6.8, 15);
+      ctx.fillStyle = '#b8261e'; ctx.fillRect(-2, -6, 4, 4);
+      ctx.strokeStyle = '#1a1414'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(0, -1); ctx.lineTo(0, 5.5); ctx.moveTo(-1.8, 1.2); ctx.lineTo(1.8, 1.2); ctx.moveTo(-1.4, 3.6); ctx.lineTo(1.4, 3.6); ctx.stroke();
       break;
     }
     case 'soul': case 'spirit': {

@@ -7,18 +7,36 @@ import { input } from './input.js';
 
 export const TALENT_KEYS = Object.keys(TALENTS);
 
-export function talentCd(t) { return Math.max(TALENT_MIN_CD * (t.minMul || 1), TALENTS[t.key].cd * t.cdMul); }
+export function talentCd(t) { return Math.max(TALENT_MIN_CD * (t.minMul || 1), TALENTS[t.key].cd[t.rarity || 0] * t.cdMul); }
 
-export function grantTalent(p, key, rarity) {
-  if (p.talents.find((t) => t.key === key) || p.talents.length >= MAX_TALENTS) return;
-  p.talents.push({ key, level: 1, power: 1 + TALENT_POWER[rarity], cdMul: 1, cd: 0, cdMax: 1 });
+// what a talent does at a rarity: num = the line on the card, short = the readout value, cd = its cooldown
+export function talentInfo(key, r) {
+  const T = TALENTS[key], cd = T.cd[r];
+  switch (key) {
+    case 'arrowRain': { const hits = Math.round(T.dur / T.tick); return { cd, num: `${T.dmg[r]} damage × ${hits} hits`, short: `${T.dmg[r]}×${hits}` }; }
+    case 'meteor': return { cd, num: `${T.dmg[r]} damage`, short: `${T.dmg[r]}` };
+    case 'meditate': return { cd, num: r === 3 ? 'Full energy' : `+${T.energy[r]} energy`, short: r === 3 ? 'full' : `+${T.energy[r]}` };
+    case 'vitalize': return { cd, num: r === 3 ? 'Full health' : `+${T.heal[r]} health`, short: r === 3 ? 'full' : `+${T.heal[r]}` };
+    case 'shadows': return { cd, num: `${T.count[r]} shadows`, short: `${T.count[r]}` };
+    case 'rage': return { cd, num: `${T.mult[r]}× damage`, short: `${T.mult[r]}×` };
+  }
+  return { cd, num: '', short: '' };
 }
 
+// a new talent; replace = the key of an owned talent it takes the place of (when all slots are full)
+export function grantTalent(p, key, rarity, replace = null) {
+  if (p.talents.find((t) => t.key === key)) return;
+  const t = { key, level: 1, rarity, cdMul: 1, cd: 0, cdMax: 1 };
+  const at = replace ? p.talents.findIndex((x) => x.key === replace) : -1;
+  if (at >= 0) { t.cdMul = p.talents[at].cdMul; t.minMul = p.talents[at].minMul; p.talents[at] = t; return; } // same button, same sacrifice bonuses
+  if (p.talents.length < MAX_TALENTS) p.talents.push(t);
+}
+
+// an upgrade card raises an owned talent to the card's (higher) rarity
 export function upgradeTalent(p, key, kind, rarity) {
   const t = p.talents.find((x) => x.key === key);
   if (!t) return;
-  if (kind === 'power') t.power += TALENT_UPGRADE_POWER[rarity];
-  else t.cdMul *= 1 - TALENT_UPGRADE_CD[rarity];
+  t.rarity = Math.max(t.rarity || 0, rarity);
   t.level++;
 }
 
@@ -46,45 +64,45 @@ export function talentTarget(g, p) {
 
 // Performs the talent's effect (on the host / in local games).
 export function activateTalent(g, p, t, tx, ty) {
-  const T = TALENTS[t.key], pw = t.power;
+  const T = TALENTS[t.key], r = t.rarity || 0;
   const partner = g.players.find((o) => o !== p && o.active);
   switch (t.key) {
     case 'arrowRain':
-      g.hazards.push({ kind: 'arrows', x: tx, y: ty, r: T.radius, t: T.dur, dur: T.dur, tick: 0, dmg: Math.round(T.dmg * pw), from: p });
+      g.hazards.push({ kind: 'arrows', x: tx, y: ty, r: T.radius, t: T.dur, dur: T.dur, tick: 0, dmg: T.dmg[r], from: p });
       sfx.throwKnife(); sfx.shoot();
       break;
     case 'meteor':
-      g.hazards.push({ kind: 'meteor', x: tx, y: ty, r: T.radius, t: T.delay, delay: T.delay, dmg: Math.round(T.dmg * pw), from: p });
+      g.hazards.push({ kind: 'meteor', x: tx, y: ty, r: T.radius, t: T.delay, delay: T.delay, dmg: T.dmg[r], from: p });
       sfx.bossRoar();
       break;
     case 'meditate': {
-      p.energy = p.maxEnergy;
+      { const before = p.energy; p.energy = Math.min(p.maxEnergy, p.energy + T.energy[r]); if (r < 3) g.fx.text(p.x, p.y, `+${Math.round(p.energy - before)} energy`, '#9ee8ff', 16); }
       g.fx.ring(p.x, p.y, 2.2, 'rgba(120,220,255,0.9)', 0.6, 6);
       g.particles.burst('glow', p.x, p.y, 0.8, 24, 2.5, 1, 2.4, '#9ee8ff');
-      if (partner) { partner.energy = Math.min(partner.maxEnergy, partner.energy + T.partner * pw); g.fx.text(partner.x, partner.y, `+${Math.round(T.partner * pw)} ki`, '#9ee8ff', 15); }
+      if (partner) { partner.energy = Math.min(partner.maxEnergy, partner.energy + T.partner[r]); g.fx.text(partner.x, partner.y, `+${T.partner[r]} energy`, '#9ee8ff', 15); }
       sfx.chime(1);
       break;
     }
     case 'vitalize': {
-      const got = p.heal(T.heal * pw);
+      const got = p.heal(T.heal[r]);
       g.fx.text(p.x, p.y, `+${Math.round(got)}`, '#7dff9a', 18);
       g.fx.ring(p.x, p.y, 2.2, 'rgba(140,255,170,0.9)', 0.6, 6);
       g.particles.burst('glow', p.x, p.y, 0.8, 24, 2.5, 1, 2.4, '#9dffb0');
-      if (partner) { const n = partner.heal(T.partner * pw); g.fx.text(partner.x, partner.y, `+${Math.round(n)}`, '#7dff9a', 15); }
+      if (partner) { const n = partner.heal(T.partner[r]); g.fx.text(partner.x, partner.y, `+${Math.round(n)}`, '#7dff9a', 15); }
       sfx.chime(1);
       break;
     }
     case 'shadows':
-      for (let i = 0; i < T.count; i++) {
-        const a = (i / T.count) * TAU;
+      for (let i = 0; i < T.count[r]; i++) {
+        const a = (i / T.count[r]) * TAU;
         const x = clamp(p.x + Math.cos(a) * 1.4, 1, g.world.N - 1), y = clamp(p.y + Math.sin(a) * 1.4, 1, g.world.N - 1);
-        g.allies.push(new ShadowClone(g, p, x, y, T.dur, Math.round(T.dmg * pw), T.interval, i));
+        g.allies.push(new ShadowClone(g, p, x, y, T.dur, T.dmg, T.interval, i));
         g.particles.burst('ink', x, y, 0.6, 10, 2.5, 0.5, 4, '#2a1a40');
       }
       sfx.spawn();
       break;
     case 'rage':
-      p.rageT = T.dur * pw;
+      p.rageT = T.dur; p.rageMul = T.mult[r];
       g.fx.ring(p.x, p.y, 2.5, 'rgba(255,80,40,0.9)', 0.5, 7);
       g.particles.burst('ember', p.x, p.y, 0.8, 30, 4, 0.8, 2.6, '#ff5a2a');
       sfx.bossRoar();
@@ -155,7 +173,7 @@ export class ShadowClone {
           const ex = e.x - this.x, ey = e.y - this.y, ed = Math.hypot(ex, ey);
           if (ed < 1.6 + e.r && Math.abs(angDiff(Math.atan2(this.faceY, this.faceX), Math.atan2(ey, ex))) < 1.1) {
             const { dmg, crit } = this.owner.rollDamage(this.dmg);
-            g.damageEnemy(e, dmg, crit, ex / (ed || 1), ey / (ed || 1), 1.5, 0.1, { player: this.owner });
+            g.damageEnemy(e, dmg, crit, ex / (ed || 1), ey / (ed || 1), 1.5, 0.1, { player: this.owner, ally: true });
           }
         }
       }

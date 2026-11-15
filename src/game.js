@@ -1,12 +1,16 @@
 // Game orchestration: states, level flow, spawning, combat glue, camera and rendering.
 import { TAU, clamp, lerp, rand, pick, ease, isoX, isoY, screenToWorld, dist, angDiff } from './util.js';
-import { ENEMIES, BOSSES, BIOME_POOLS, levelBudget, PLAYER_BASE, COOP_BOSS_HP, COOP_ENEMY_COUNT, ELEMENTS, ELEMENT_RULES, HEAVY_WEIGHT, heavyCap, SHIELD, DROPS } from './config.js';
+import { ADMIN_DAMAGE, ENEMIES, BOSSES, BIOME_POOLS, levelBudget, PLAYER_BASE, COOP_BOSS_HP, COOP_ENEMY_COUNT, ELEMENTS, ELEMENT_RULES, HEAVY_WEIGHT, heavyCap, SHIELD, DROPS, MUSIC_TENSE, SPAWN_PACING, chainDamageFor, DIFFICULTY, DOJO_POOL, LIBRARY_POOL, LIBRARY_WISE_WEIGHT } from './config.js';
 import { World } from './world.js';
 import { Player } from './player.js';
 import { Enemy, updateProjectiles, updateHazards, drawHazards, drawProjectiles, drawProjectileShadows } from './enemies.js';
 import { Particles, Decals, Effects } from './particles.js';
-import { CardScreen, rollUpgrades, applyUpgrade, drawIcon } from './cards.js';
-import { Overlay, drawHUD, drawBanners, drawDebug, drawBossIntro } from './ui.js';
+import { CardScreen, rollReward, applyUpgrade, drawIcon } from './cards.js';
+import { RouteScreen, makeAreaMap, rewardOf, areaOf, AREAS, nodeOf, decorateNode } from './route.js';
+import { ARTS } from './arts.js';
+import { tryFinisher } from './finishers.js';
+import { uiScale, text as uiText } from './ui.js';
+import { Overlay, drawHUD, drawBanners, drawDebug, drawBossIntro, drawTenseOverlay, drawCinemaBars } from './ui.js';
 import { Menu } from './menu.js';
 import { input } from './input.js';
 import { sfx, music } from './audio.js';
@@ -14,32 +18,46 @@ import { net } from './net.js';
 import { OnlineHost, OnlineClient, smoothPuppets } from './online.js';
 import { updateAllies } from './talents.js';
 import { Nav } from './nav.js';
-import { Monk, MONK_LEVELS, rollSacrifices, takeSacrifice, SACRIFICES } from './sacrifice.js';
+import { Monk, rollSacrifices, takeSacrifice, SACRIFICES } from './sacrifice.js';
 import { Dialogue } from './dialogue.js';
 import { storyLines } from './story.js';
+import { recordPick } from './cards.js';
 import { IntroCutscene } from './cutscene.js';
+import { Area2Cutscene } from './cutscene2.js';
+import { drawTeaHouse } from './teahouse.js';
+const CUTSCENES = { intro: IntroCutscene, area2: Area2Cutscene };
+const AREA2_SONG_SWITCH = 150; // seconds into the area 2 cutscene song (2:30) where it hands over to the tense song
 
 export const FINAL_LEVEL = 33;
 // level -> biome: 1-10 spring, 11-20 autumn, 21-30 winter, 31+ the Kagerō fortress
 export const biomeOf = (n) => (n > 30 ? 3 : Math.floor((n - 1) / 10));
 
 const INTRO_DUR = 4.8;
+// low health tension: eases off after this many seconds without a hit, down to this share of itself
+const LOW_CALM_AFTER = 4, LOW_CALM_FADE = 3, LOW_CALM_MIN = 0.3;
+// route reward -> the level's arena (other rewards use the area's ordinary map)
+const LEVEL_KIND = { stat: 'town', sacrifice: 'temple', art: 'dojo', talent: 'library', element: 'shrine', training: 'training' };
+const KIND_BANNER = { shrine: { title: 'Imbuement Shrine', kanji: '宿' }, town: { kanji: '町' }, temple: { kanji: '寺' }, dojo: { title: 'Training Hall', kanji: '道場' }, library: { kanji: '書庫' } };
 
 class Spawner {
   constructor(g, level) {
     this.g = g; this.level = level; this.t = 0; this.waves = []; this.pending = []; this.waveIdx = 0; this.lastWaveT = 0; this.lastWaveCount = 0;
     if (BOSSES[level]) { this.boss = BOSSES[level]; this.bossDone = false; return; }
     const biome = biomeOf(level);
-    const pool = BIOME_POOLS[biome].filter((t) => ENEMIES[t].minLevel <= level);
-    let budget = levelBudget(level) * (g.players.length > 1 ? COOP_ENEMY_COUNT : 1);
+    // the route node's difficulty (fewer / more enemies and heavies) and the level's kind (its own enemies)
+    const info = g.levelInfo || {}, D = DIFFICULTY[info.d ?? 1] || DIFFICULTY[1], kind = g.world && g.world.kind;
+    let pool = BIOME_POOLS[biome].filter((t) => ENEMIES[t].minLevel <= level);
+    if (kind === 'dojo') pool = DOJO_POOL.slice();
+    else if (kind === 'library') pool = [...pool, ...LIBRARY_POOL];
+    let budget = levelBudget(level) * (g.players.length > 1 ? COOP_ENEMY_COUNT : 1) * D.count;
     const list = [];
-    const cap = heavyCap(level, g.players.length > 1);
+    const cap = Math.max(0, heavyCap(level, g.players.length > 1) + D.heavyCap);
     let heavies = 0;
     while (budget > 0.5) {
       const affordable = pool.filter((t) => ENEMIES[t].cost <= budget && (!ENEMIES[t].heavy || heavies < cap));
       if (!affordable.length) break;
       // newer types are a bit rarer, cheap fodder more common, big tanks rare
-      const weights = affordable.map((t) => (t === 'bandit' ? 1.6 : 1) * (level - ENEMIES[t].minLevel < 3 ? 0.6 : 1) * (ENEMIES[t].heavy ? HEAVY_WEIGHT : 1));
+      const weights = affordable.map((t) => (t === 'bandit' || t === 'karateka' ? 1.6 : 1) * (level - ENEMIES[t].minLevel < 3 ? 0.6 : 1) * (ENEMIES[t].heavy ? HEAVY_WEIGHT * D.heavyW : 1) * (LIBRARY_POOL.includes(t) && kind === 'library' ? LIBRARY_WISE_WEIGHT : 1));
       let r = Math.random() * weights.reduce((a, b) => a + b, 0);
       let type = affordable[0];
       for (let i = 0; i < affordable.length; i++) { r -= weights[i]; if (r <= 0) { type = affordable[i]; break; } }
@@ -47,7 +65,10 @@ class Spawner {
       if (ENEMIES[type].heavy) heavies++;
     }
     for (let i = list.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [list[i], list[j]] = [list[j], list[i]]; }
-    const nW = level < 3 ? 1 : level < 12 ? 2 : 3;
+    // later areas: many smaller waves that trickle in, instead of a third of the level at once
+    const P = SPAWN_PACING[biome];
+    const nW = level < 3 ? Math.min(2, P.waves) : P.waves;
+    this.stagger = P.stagger; this.waveTimeout = P.timeout;
     for (let w = 0; w < nW; w++) this.waves.push(list.filter((_, i) => i % nW === w));
   }
   remaining() {
@@ -66,10 +87,10 @@ class Spawner {
     const alive = g.enemies.filter((e) => !e.dead).length;
     if (this.waveIdx < this.waves.length) {
       const first = this.waveIdx === 0;
-      const trigger = first ? this.t > 0.8 : (alive <= Math.max(1, Math.floor(this.lastWaveCount * 0.35)) || this.t - this.lastWaveT > 14) && this.pending.length === 0;
+      const trigger = first ? this.t > 0.8 : (alive <= Math.max(1, Math.floor(this.lastWaveCount * 0.35)) || this.t - this.lastWaveT > (this.waveTimeout || 14)) && this.pending.length === 0;
       if (trigger) {
         const wave = this.waves[this.waveIdx++];
-        wave.forEach((type, i) => this.pending.push({ type, t: i * 0.22 }));
+        wave.forEach((type, i) => this.pending.push({ type, t: i * (this.stagger || 0.22) }));
         this.lastWaveT = this.t; this.lastWaveCount = wave.length;
         if (!first) sfx.spawn();
       }
@@ -86,6 +107,12 @@ export class Game {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.particles = new Particles(); this.decals = new Decals(); this.fx = new Effects();
+    this.tenseVis = 0; this.tenseEmbers = []; this.lowVis = 0;
+    // the moment the tense version comes in (on the bar line): a dark red pulse and a small jolt
+    music.onMood = (m) => {
+      if (m !== 'tense' || !this.inRun || this.state !== 'play') return;
+      this.localFlash('rgba(110,8,20,0.28)'); this.localShake(3);
+    };
     this.players = [];
     this.enemies = []; this.projectiles = []; this.hazards = []; this.timers = []; this.banners = [];
     this.allies = []; this.warpT = 0; this.warpScale = 1; this.pickups = [];
@@ -99,7 +126,7 @@ export class Game {
     this.params = { level: clamp(parseInt(q.get('level') || '1', 10) || 1, 1, 33), god: q.get('god') === '1', weapons: q.get('weapons'), monk: q.get('monk') === '1' };
     this.god = this.params.god;
     try { this.best = parseInt(localStorage.getItem('kage.best') || '0', 10) || 0; } catch (e) { this.best = 0; }
-    this.menu = new Menu(this); this.cards = new CardScreen(this); this.overlay = new Overlay(this);
+    this.menu = new Menu(this); this.cards = new CardScreen(this); this.overlay = new Overlay(this); this.routeScreen = new RouteScreen(this);
     this.view = { W: 1, H: 1, dpr: 1, s: 1, baseS: 1, k: 1, camX: 0, camY: 0, dcx: 0, dcy: 0 };
     this.view.toScreen = (x, y, z = 0) => [this.view.W / 2 + (isoX(x, y) - this.view.camX) * this.view.s + this.shakeX, this.view.H / 2 + (isoY(x, y, z) - this.view.camY) * this.view.s + this.shakeY];
     this.view.toScreenY = (x, y, z = 0) => this.view.H / 2 + (isoY(x, y, z) - this.view.camY) * this.view.s;
@@ -126,7 +153,7 @@ export class Game {
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     const w = innerWidth, h = innerHeight;
     this.canvas.width = Math.round(w * dpr); this.canvas.height = Math.round(h * dpr);
-    const zoom = clamp(Math.min(w / 1280, h / 760) * 1.3, 0.75, 2.4);
+    const zoom = clamp(Math.min(w / 1280, h / 760) * 1.42, 0.8, 2.6);
     Object.assign(this.view, { W: this.canvas.width, H: this.canvas.height, dpr, zoom, baseS: zoom * dpr, s: zoom * dpr * this.cam.zoom, k: zoom * dpr });
     if (this.world) this.world.buildGround(this.groundScale());
     if (this.cards.active) this.cards.layout();
@@ -144,6 +171,7 @@ export class Game {
   // ---------------------------------------------------------------- flow
   toTitle() {
     this.state = 'title'; this.paused = false; this.hostPaused = false;
+    this.training = false; this.trainingStats = null;
     if (this.online) net.close();
     this.online = null; this.role = 'solo';
     this.menu.reset();
@@ -173,18 +201,67 @@ export class Game {
     this.runStats = { kills: 0, time: 0, damage: 0, upgrades: 0 };
     this.state = 'play';
     this.monkVisited = new Set(); this.monkActive = false; // per run (a new run meets every monk again)
+    this.area2Chill = false; this.skipAreaIntro = 0;
     const first = startLevel || this.params.level;
     this.runStart = first;
+    if (first > 1) for (const p of this.players) p.adminMul = ADMIN_DAMAGE; // admin mode: starting at a chosen level
+    this.route = makeAreaMap(areaOf(first));
+    { const c = first - this.route.first; if (c > 0) { this.route.cols[c].nodes = [decorateNode({ r: 'stat', y: 0.5 }, areaOf(first))]; } this.route.path[c] = 0; }
     if (this.role !== 'client' && first === 1) this.playIntro();
+    else if (this.role !== 'client' && first === 11) this.playArea2();
     else if (this.role !== 'client') this.loadLevel(first);
     else { this.state = 'transition'; this.fade = 1; } // wait for the host's first level
   }
 
-  loadLevel(n, seed = Math.floor(Math.random() * 1e9)) {
+  // info: the route node of this level (sent by the host online; otherwise read from the route)
+  // Training (main menu): one player with the chosen weapons and techniques in a small hall with a
+  // straw dummy. Nothing attacks; the back door is open the whole time and walking through it leaves.
+  // arts: [[weaponSlot, artKey], ...]
+  startTraining(weapons, arts = []) {
+    this.role = 'solo'; input.coop = false; this.online = null;
+    this.players = [new Player(this, weapons, 0)];
+    for (const [slot, key] of arts) {
+      const w = this.players[0].weapons[slot], A = w && ARTS[w.key][key];
+      if (A) w.arts = { ...(w.arts || {}), [A.slot]: key };
+    }
+    this.runStats = { kills: 0, time: 0, damage: 0, upgrades: 0 };
+    this.state = 'play'; this.monkVisited = new Set(); this.monkActive = false; this.area2Chill = false;
+    this.training = true; this.trainingStats = { log: [], total: 0 };
+    this.runStart = 0; this.route = null; this.skipAreaIntro = 2; // (no story lines, no best-level record)
+    this.loadLevel(2, undefined, { r: 'training', d: 1, q: 0 });
+  }
+  leaveTraining() {
+    sfx.gate();
+    this.toTitle();
+    this.menu.mode = 'main'; this.menu.t = 0;
+  }
+  drawTrainingPanel(ctx) {
+    const v = this.view, u = uiScale(v), S = this.trainingStats;
+    if (!S) return;
+    S.log = S.log.filter(([t]) => this.time - t < 5);
+    const recent = S.log.reduce((a, [, d]) => a + d, 0);
+    const span = S.log.length ? Math.max(1, this.time - S.log[0][0]) : 1;
+    const w = 330 * u, h = 52 * u, x = v.W / 2 - w / 2, y = 16 * u;
+    ctx.save();
+    ctx.fillStyle = 'rgba(16,10,6,0.82)'; ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = '#c8a46c'; ctx.lineWidth = 1.5; ctx.strokeRect(x, y, w, h);
+    uiText(ctx, '稽古  Training', v.W / 2, y + 14 * u, 13 * u, '#f0c870', 800, '"Shippori Mincho", serif');
+    uiText(ctx, `Last 5 s: ${recent} damage   ·   DPS ${Math.round(recent / span)}   ·   Total ${S.total}`, v.W / 2, y + 34 * u, 12 * u, '#f8f0de', 700);
+    ctx.restore();
+    uiText(ctx, 'Walk out through the back door (出口) to leave', v.W / 2, y + h + 14 * u, 11 * u, 'rgba(248,240,222,0.7)', 700);
+  }
+
+  // info: the route node of this level (sent by the host online; otherwise read from the route)
+  loadLevel(n, seed = Math.floor(Math.random() * 1e9), info = null) {
     this.level = n;
     const bi = biomeOf(n);
     if (this.role === 'client') { this.state = 'play'; this.cards.active = false; this.cutscene = null; this.dialogue = null; }
-    this.world = new World(n, bi, seed, { hall: !!(BOSSES[n] && BOSSES[n].hall) });
+    const node = info || (BOSSES[n] ? null : nodeOf(this.route, n));
+    this.levelInfo = node ? { r: node.r, d: node.d ?? 1, q: node.q ?? 0, name: node.name || null, monk: node.monk ?? null, monkName: node.monkName || null } : { r: 'stat', d: 1, q: 0 };
+    // towns, temples, training halls and libraries each have their own arena
+    const kind = BOSSES[n] ? null : LEVEL_KIND[this.levelInfo.r] || null;
+    this.world = new World(n, bi, seed, { hall: !!(BOSSES[n] && BOSSES[n].hall), kind });
+    this.scrollWaiting = false;
     this.inRun = true; this.preview = null;
     this.world.buildGround(this.groundScale());
     this.nav = new Nav(this);
@@ -192,29 +269,45 @@ export class Game {
     this.allies = []; this.warpT = 0; this.monk = null; this.sacPending = null; this.monkActive = false; this.pickups = [];
     this.particles.list.length = 0; this.decals.list.length = 0;
     this.fx = new Effects();
+    // a consumable path: a rest at a tea house instead of a fight (no enemies; the consumables are offered inside)
+    this.restStop = !BOSSES[n] && this.levelInfo.r === 'item';
+    this.teaHouse = this.restStop ? { start: this.realTime } : null;
     this.players.forEach((p, i) => p.resetForLevel(this.world.spawn.x + i * 0.9, this.world.spawn.y - i * 0.9));
     this.spawner = new Spawner(this, n);
+    if (this.restStop) this.spawner.waves = [];
+    if (this.world.kind === 'training') { // only the dummy, and the way out is open from the start
+      this.spawner.waves = [];
+      const N = this.world.N, d = new Enemy(this, 'dummy', N / 2 - 0.5, N / 2 - 1, n);
+      d.faceX = 1; d.faceY = 1; this.addEnemy(d);
+      this.world.gate.active = true;
+    }
     this.cleared = false; this.bossRef = null; this.bossTrail = null; this.intro = null;
     const c = this.playersCenter();
     this.cam.x = c[0]; this.cam.y = c[1];
     const b = this.world.biome;
-    if (!BOSSES[n]) {
-      if (n % 10 === 1 || n === this.runStart) this.banner({ title: b.name, sub: `Level ${n}`, kanji: b.jp.slice(0, 2), dur: 2.8 });
-      else this.banner({ title: `Level ${n}`, sub: b.name, dur: 2 });
-      if (this.role !== 'client') this.later(0.6, () => { if (this.state === 'play' && this.level === n && !this.cleared) this.say(`level${n}`); });
+    if (this.restStop) this.banner({ title: 'The Tea House', sub: 'Sit down and rest a while', kanji: '茶', dur: 2.4 });
+    else if (!BOSSES[n]) {
+      const KB = KIND_BANNER[this.world.kind], diff = DIFFICULTY[this.levelInfo.d].name;
+      if (this.world.kind === 'training') this.banner({ title: 'Training', sub: 'Try your weapons and techniques on the dummy', kanji: '稽古', dur: 2.4 });
+      else if (n % 10 === 1 || n === this.runStart) this.banner({ title: b.name, sub: `Level ${n} · ${KB ? (KB.title || this.levelInfo.name) + ' · ' : ''}${diff}`, kanji: b.jp.slice(0, 2), dur: 2.8 });
+      else if (KB) this.banner({ title: KB.title || this.levelInfo.name || b.name, sub: `Level ${n} · ${diff}`, kanji: KB.kanji, dur: 2.4 });
+      else this.banner({ title: `Level ${n}`, sub: `${b.name} · ${diff}`, dur: 2 });
+      if (this.role !== 'client' && this.skipAreaIntro !== n) this.later(0.6, () => { if (this.state === 'play' && this.level === n && !this.cleared) this.say(`level${n}`); });
     }
     this.fade = 1; this.fadeDir = -1;
-    if (this.role === 'host') this.online.levelLoaded(n, seed);
+    if (this.role === 'host') this.online.levelLoaded(n, seed, this.levelInfo);
     // first level of an area: its boss steps out of the gate and says a word before the fight starts
-    if (this.role !== 'client' && !BOSSES[n] && (n === 1 || n === 11 || n === 21 || n === 31)) this.startPreview(bi);
+    if (this.role !== 'client' && !BOSSES[n] && (n === 1 || n === 11 || n === 21 || n === 31) && this.skipAreaIntro !== n) this.startPreview(bi);
+    this.skipAreaIntro = 0;
     const legit = this.runStart === 1 && !this.god;
     if (legit && n > this.best) { this.best = n; try { localStorage.setItem('kage.best', String(n)); } catch (e) { /* storage unavailable */ } }
   }
 
   onLevelCleared() {
     this.cleared = true;
+    if (this.restStop) { this.offerBlessings(2.2); return; } // a rest: no gong, no 'Level Cleared'
     sfx.gong();
-    this.slow(1.0, 0.25);
+    this.slow(1.8, 0.25);
     // clearing the level picks up anyone who is down
     for (const p of this.players) if (p.downed) { p.downed = false; p.hp = PLAYER_BASE.reviveHp; p.iframes = 2; this.fx.ring(p.x, p.y, 1.6, 'rgba(140,255,170,0.9)', 0.6, 5); }
     const heal = PLAYER_BASE.clearHeal;
@@ -228,7 +321,27 @@ export class Game {
     this.offerBlessings(1.5);
   }
 
-  offerBlessings(delay) {
+  // atDesk: a library's talent scrolls are only offered once a player walks up to the desk
+  offerBlessings(delay, atDesk = false) {
+    const boss = !!BOSSES[this.level], info = this.levelInfo || { r: 'stat', q: 0 };
+    const type = boss ? 'stat' : info.r;
+    if (type === 'sacrifice' && !boss) {
+      this.later(delay, () => { if (this.state === 'play' && this.alivePlayers().length && !this.monkActive) { this.monkVisited.add(this.level); this.startMonk(); } });
+      return;
+    }
+    const altar = (type === 'talent' && this.world.library) || (type === 'element' && this.world.shrine);
+    if (altar && !atDesk && this.role !== 'client') { // the reward waits at the library desk / the shrine
+      this.later(delay, () => {
+        if (this.state !== 'play' || !this.alivePlayers().length) return;
+        this.scrollWaiting = true; altar.ready = true;
+        sfx.chime(1);
+        if (this.world.shrine) this.banner({ title: 'The shrine awakens', sub: 'Kneel before it to imbue your weapon', kanji: '宿', dur: 2.6, y: 0.3, size: 26 });
+        else this.banner({ title: 'The library is quiet again', sub: 'Take a scroll from the desk inside', kanji: '巻', dur: 2.6, y: 0.3, size: 26 });
+      });
+      return;
+    }
+    const tier = boss ? 0 : info.q ?? 0;
+    const rollUpgrades = (p) => rollReward(p, type, tier);
     if (this.role === 'host') {
       // online: both players pick at the same time on their own screens
       this.later(delay, () => {
@@ -258,12 +371,79 @@ export class Game {
   }
 
   // ---------------------------------------------------------------- music
-  // menu music on the title, weapon select and opening cutscene; the area's track during a run.
+  // Menu music on the title and weapon select; the opening cutscene already plays area 1's song, which
+  // carries straight on into level 1. During a run: the area's song (the tense versions only).
   // Blessing / sacrifice cards and dialogue muffle it (low-pass) without stopping it.
+  // Each area's song has a chill and a tense version (the fortress uses area 3's song).
   updateMusic() {
-    const menu = this.state === 'title' || this.state === 'cutscene' || !this.inRun || !this.world;
-    music.set(menu ? 'main_menu' : `biome_${Math.min(3, this.world.bi) + 1}`);
-    music.muffle(!menu && (this.state === 'cards' || this.state === 'dialogue'));
+    if (this.state === 'cutscene') { music.set((this.cutscene && this.cutscene.song) || 'biome_1_tense'); music.muffle(false); return; }
+    const menu = this.state === 'title' || !this.inRun || !this.world;
+    this.musicTense(); // still drives the tense screen effect during fights
+    let song = menu ? 'main_menu' : `biome_${Math.min(2, this.world.bi) + 1}_tense`; // the area's (tense) song
+    // the area 2 cutscene's song plays on into the area until 2:30, then crossfades into the tense song
+    if (this.area2Chill) {
+      if (!menu && this.world.bi === 1 && music.timeOf('biome_2_chill') < AREA2_SONG_SWITCH) song = 'biome_2_chill';
+      else this.area2Chill = false;
+    }
+    music.set(song);
+    // the filter: heavy for cards / dialogue / the map, the highs cut while paused, and closing in as health runs low
+    let hz = null;
+    if (!menu && (this.state === 'cards' || this.state === 'dialogue' || this.state === 'route')) hz = 480;
+    else if (!menu && this.paused) hz = 900;
+    else if (!menu && (this.lowVis || 0) > 0.3) hz = Math.round(lerp(5000, 1100, clamp((this.lowVis - 0.3) / 0.7, 0, 1)));
+    music.muffle(hz !== null, hz ?? undefined);
+  }
+
+  // screen mood for tense music: fades in over ~1.5 s, out over ~3 s; embers rise from the bottom edge
+  updateTenseVis(dt) {
+    const on = this.tense && this.inRun && !this.paused && (this.state === 'play' || this.state === 'intro' || this.state === 'dialogue');
+    this.tenseVis = clamp(this.tenseVis + (on ? dt / 1.5 : -dt / 3), 0, 1);
+    // low health: the lower the weakest standing player's health, the more cinematic (from 65% down to 15%)
+    const ps = this.inRun && (this.state === 'play' || this.state === 'intro' || this.state === 'dialogue' || this.state === 'cards') ? this.alivePlayers() : [];
+    const frac = ps.length ? Math.min(...ps.map((p) => p.hp / p.maxHp)) : 1;
+    // a breather: after LOW_CALM_AFTER s without being hit the tension eases off (to LOW_CALM_MIN of itself over
+    // LOW_CALM_FADE s); the next hit brings it straight back
+    const lastHit = ps.length ? Math.max(...ps.map((p) => p.lastHurtAt ?? -99)) : -99, quiet = this.realTime - lastHit;
+    const calm = clamp((quiet - LOW_CALM_AFTER) / LOW_CALM_FADE, 0, 1);
+    const want = clamp((0.75 - frac) / 0.55, 0, 1) * lerp(1, LOW_CALM_MIN, calm); // starts below 75% health, full at 20%
+    this.lowVis += (want - this.lowVis) * (1 - Math.exp(-dt * (want > this.lowVis ? 2.5 : 1.2)));
+    const v = this.view, E = this.tenseEmbers;
+    if (this.tenseVis > 0.05 && Math.random() < dt * 16 * this.tenseVis) {
+      E.push({ x: Math.random() * v.W, y: v.H + 6, vx: (Math.random() - 0.5) * 30 * v.k, vy: -(40 + Math.random() * 70) * v.k, life: 0, max: 1.6 + Math.random() * 1.6, s: (1 + Math.random() * 2.2) * v.k });
+    }
+    for (const e of E) { e.life += dt; e.x += e.vx * dt + Math.sin(e.life * 3 + e.max) * 12 * dt * v.k; e.y += e.vy * dt; }
+    this.tenseEmbers = E.filter((e) => e.life < e.max);
+  }
+
+  // a player hit something, was hit, or attacked with enemies close by
+  noteCombat() { this.combatT = this.realTime; }
+  // Tense while you fight 3+ enemies (or a boss); chill at a level's start, once only a couple are left,
+  // after a few seconds without fighting, once cleared, when everyone is down and between levels.
+  musicTense() {
+    const M = MUSIC_TENSE, now = this.realTime, dt = Math.min(0.1, Math.max(0, now - (this.tenseLast ?? now)));
+    this.tenseLast = now;
+    this.moodT = (this.moodT || 0) + dt;
+    const ps = this.alivePlayers();
+    const off = this.state === 'route' || this.state === 'transition' || this.state === 'dead' || this.state === 'victory' || !ps.length || this.players.every((p) => p.dead || p.downed);
+    if (off) { if (this.tense) this.moodT = 0; this.tense = false; return false; }
+    let boss = false, alive = 0;
+    for (const e of this.enemies) {
+      if (e.dead || e.preview) continue;
+      if (e.boss) { if (!BOSSES[this.level]) continue; boss = true; } // the area-start boss preview is not a fight
+      alive++;
+    }
+    const fighting = now - (this.combatT ?? -99) < M.combatWindow;
+    const hot = !this.cleared && (boss || (fighting && alive >= M.combatEnemies));
+    if (!this.tense) {
+      if (hot && this.moodT >= M.minChill) { this.tense = true; this.moodT = 0; this.calmT = 0; this.fewT = 0; }
+    } else {
+      // back to chill: the level is cleared, only a couple of enemies are left, or nobody has fought for a while
+      this.fewT = !boss && alive <= M.calmEnemies ? (this.fewT || 0) + dt : 0;
+      this.calmT = !boss && !fighting ? (this.calmT || 0) + dt : 0;
+      const calm = this.cleared ? this.moodT > 0 && (this.calmT > M.clearedHold || this.fewT > M.clearedHold) : this.fewT > M.calmHold || this.calmT > M.hold;
+      if (calm && (this.cleared || this.moodT >= M.minTense || this.fewT > M.calmHold)) { this.tense = false; this.moodT = 0; }
+    }
+    return !!this.tense;
   }
 
   // ---------------------------------------------------------------- area boss preview
@@ -327,9 +507,24 @@ export class Game {
     }
   }
 
+  // the walk into Momiji Pass, then level 11 (its song keeps playing into the level)
+  playArea2() {
+    this.state = 'cutscene'; this.fade = 0; this.fadeDir = 0; this.area2Chill = true;
+    this.cutscene = new Area2Cutscene(this, () => {
+      this.cutscene = null; this.state = 'play';
+      if (this.role === 'host') net.send('dlgend', { id: 'area2' });
+      this.skipAreaIntro = 11;
+      this.loadLevel(11);
+    });
+    if (this.role === 'host') {
+      net.send('cut', { id: 'area2' });
+      this.cutscene.onLine = (i) => net.send('dlg', { id: 'area2', i });
+    }
+  }
+
   // show a script (if one exists for this team), pausing play; then() runs afterwards
-  say(id, then = () => {}) {
-    const lines = storyLines(id, this.players.length > 1);
+  say(id, then = () => {}, vars = null) {
+    const lines = storyLines(id, this.players.length > 1, vars);
     if (!lines.length || this.role === 'client') { then(); return; }
     const back = this.state === 'dialogue' ? 'play' : this.state;
     this.state = 'dialogue';
@@ -338,19 +533,19 @@ export class Game {
       this.dialogue = null; this.state = back;
       if (this.role === 'host') net.send('dlgend', { id });
       then();
-    }, (i) => { if (this.role === 'host') net.send('dlg', { id, i }); });
+    }, (i) => { if (this.role === 'host') net.send('dlg', { id, i, vars }); });
   }
 
   // joiner: mirror the host's dialogue / cutscene
   onRemoteDialogue(m) {
-    if (m.id === 'intro') {
-      if (!this.cutscene) this.onRemoteCutscene();
+    if (CUTSCENES[m.id]) {
+      if (!this.cutscene || this.cutscene.id !== m.id) this.onRemoteCutscene(m);
       const d = this.cutscene.dlg;
       if (d.active && d.i !== m.i) d.go(m.i);
       return;
     }
     if (!this.dialogue || this.dialogue.id !== m.id) {
-      const lines = storyLines(m.id, this.players.length > 1);
+      const lines = storyLines(m.id, this.players.length > 1, m.vars || null);
       if (!lines.length) return;
       this.dialogue = new Dialogue(this, { remote: true });
       this.dialogue.onRemoteNext = () => net.send('dlgnext', {});
@@ -359,13 +554,15 @@ export class Game {
     }
     if (this.dialogue.i !== m.i) this.dialogue.go(m.i);
   }
-  onRemoteCutscene() {
+  onRemoteCutscene(m = {}) {
     this.state = 'cutscene'; this.fade = 0;
-    this.cutscene = new IntroCutscene(this, () => { this.cutscene = null; this.state = 'transition'; this.fade = 1; }, { remote: true });
+    if (m.id === 'area2') this.area2Chill = true;
+    this.cutscene = new (CUTSCENES[m.id] || IntroCutscene)(this, () => { this.cutscene = null; this.state = 'transition'; this.fade = 1; }, { remote: true });
     this.cutscene.dlg.onRemoteNext = () => net.send('dlgnext', {});
   }
   onRemoteDialogueEnd(m) {
     if (m.id === 'intro') { if (this.cutscene) this.cutscene.titleT = Math.max(this.cutscene.titleT, 0); return; }
+    if (m.id === 'area2') { if (this.cutscene) this.cutscene.finish(); return; }
     this.dialogue = null;
     if (this.state === 'dialogue') this.state = 'play';
   }
@@ -382,16 +579,23 @@ export class Game {
     this.state = 'play';
     this.world.gate.active = true;
     sfx.gate();
-    this.banner({ title: 'The torii gate opens', sub: 'Walk through it to continue', dur: 2.2, y: 0.25, size: 26 });
+    if (this.world.kind === 'temple') this.banner({ title: 'The pact is sealed', sub: 'Walk back down to the torii to leave', dur: 2.4, y: 0.25, size: 26 });
+    else this.banner({ title: 'The torii gate opens', sub: 'Walk through it to continue', dur: 2.2, y: 0.25, size: 26 });
   }
 
   // ---------------------------------------------------------------- wandering monk
   // after everyone picked a blessing: on levels 5/15/25 the monk visits first, otherwise the gate opens
   monkDue() {
     this.monkVisited = this.monkVisited || new Set();
-    return (MONK_LEVELS.includes(this.level) || this.params.monk) && !this.monkVisited.has(this.level);
+    return this.params.monk && !this.monkVisited.has(this.level); // ?monk=1: the monk visits after every level (testing)
   }
   afterPicks() {
+    if (this.restStop) {
+      this.state = 'play';
+      this.banner({ title: 'You leave the tea house', sub: 'Rested, the road goes on', dur: 1.8, y: 0.3, size: 26 });
+      this.later(1.5, () => this.enterGate());
+      return;
+    }
     if (!this.monkDue() || !this.alivePlayers().length) { this.openGate(); return; }
     this.monkVisited.add(this.level);
     this.startMonk();
@@ -401,11 +605,21 @@ export class Game {
     const w = this.world, ps = this.alivePlayers();
     const px = ps.reduce((a, p) => a + p.x, 0) / ps.length, py = ps.reduce((a, p) => a + p.y, 0) / ps.length;
     const doors = w.doors().filter((d) => !w.blocked(d.ox, d.oy, 0.4)).sort((a, b) => dist(a.ox, a.oy, px, py) - dist(b.ox, b.oy, px, py));
-    const door = doors.find((d) => dist(d.ox, d.oy, px, py) > 2.5) || doors[0] || null;
+    // at a temple the monk steps out of the temple's own doors
+    const temple = w.temple && this.levelInfo && this.levelInfo.r === 'sacrifice' ? this.levelInfo : null;
+    const door = temple ? w.temple.door : doors.find((d) => dist(d.ox, d.oy, px, py) > 2.5) || doors[0] || null;
     this.state = 'play';
     this.monk = new Monk(this, door);
+    if (temple && temple.monk !== null) this.monk.bi = temple.monk;
+    if (temple) this.monk.maxWalk = 11; // from the temple doors all the way down to you
     this.monkActive = true;
     sfx.chime(1);
+    if (temple) {
+      this.banner({ title: `${temple.monkName || 'The monk'} steps out of the temple`, sub: temple.name || 'He offers power, for a price', kanji: '僧', dur: 2.6, y: 0.3, size: 28 });
+      const bi = this.monk.bi, vars = { name: temple.monkName, temple: temple.name, names: { [`monk${bi}`]: temple.monkName } };
+      this.monk.onArrive = () => this.later(0.6, () => this.say(`temple${bi}`, () => this.offerSacrifices(), vars));
+      return;
+    }
     this.banner({ title: 'A wandering monk approaches…', sub: 'He offers power, for a price', kanji: '僧', dur: 2.6, y: 0.3, size: 28 });
     this.monk.onArrive = () => this.later(0.6, () => this.say(`monk${this.monk ? this.monk.bi : 0}`, () => this.offerSacrifices())); // speak once he reaches you
   }
@@ -473,9 +687,9 @@ export class Game {
   }
 
   // host: the joiner chose card `index` from the cards we sent
-  onRemotePick(index) {
+  onRemotePick(index, replace = null) {
     if (!this.pendingPicks || !this.pendingPicks.has(1) || !this.remoteCards) return;
-    const card = this.remoteCards[index];
+    const card = this.remoteCards[index] && { ...this.remoteCards[index], replace };
     if (card) { applyUpgrade(this.players[1], card); this.runStats.upgrades++; }
     this.pendingPicks.delete(1);
     this.checkPicksDone();
@@ -489,14 +703,51 @@ export class Game {
     const me = this.localPlayer();
     this.state = 'cards';
     this.cards.open(cards, (card) => {
-      net.send('pick', { index: card.i });
+      recordPick(me, card);
+      net.send('pick', { index: card.i, replace: card.replace || null });
       this.state = 'play';
-      this.banner({ title: 'Blessing chosen', sub: 'Waiting for the host…', dur: 2, y: 0.25, size: 24 });
+      this.banner({ title: 'Card chosen', sub: 'Waiting for the host…', dur: 2, y: 0.25, size: 24 });
     }, me);
+  }
+
+  // ---------------------------------------------------------------- route map
+  // after the gate: the map of this area (or of the next area after a boss); the chosen path decides
+  // the reward of the next level
+  openRoute() {
+    const next = this.level + 1;
+    if (!this.route || next > this.route.last || next < this.route.first) this.route = makeAreaMap(areaOf(next));
+    const R = this.route;
+    this.state = 'route'; this.fade = 1; this.fadeDir = -1;
+    this.routeScreen.open(R, next, {
+      onChoose: (i) => {
+        R.path[next - R.first] = i;
+        this.routeNext = next;
+        this.state = 'transition'; this.fade = 0; this.fadeDir = 1;
+      },
+    });
+    if (this.role === 'host') {
+      const send = () => net.send('route', { r: R, next, sel: this.routeScreen.sel, ch: this.routeScreen.chosen });
+      this.routeScreen.onSel = send;
+      const choose = this.routeScreen.choose.bind(this.routeScreen);
+      this.routeScreen.choose = (i) => { choose(i); send(); };
+      send();
+    }
+  }
+  // joiner: show the host's map and follow the host's cursor
+  onRemoteRoute(m) {
+    const S = this.routeScreen;
+    if (this.state !== 'route' || !S.active || S.next !== m.next) {
+      this.route = m.r;
+      this.state = 'route'; this.fade = 0; this.fadeDir = 0; this.cards.active = false;
+      S.open(m.r, m.next, { readonly: true, sel: m.sel, onChoose: () => {} });
+    }
+    S.sel = m.sel;
+    if (m.ch >= 0 && S.chosen < 0) { S.chosen = m.ch; S.goT = 0; }
   }
 
   enterGate() {
     if (this.state !== 'play') return;
+    if (this.training) { this.leaveTraining(); return; }
     this.state = 'transition'; this.fadeDir = 1; this.fade = 0;
     sfx.gate();
   }
@@ -672,8 +923,21 @@ export class Game {
 
   // src: { player, weapon } for player hits; { chain: true } for lightning; { dot: true } for poison ticks
   damageEnemy(e, dmg, crit, dx, dy, knock, stun, src = null) {
+    this.combatT = this.realTime;
     if (e.dead || e.state === 'intro') return;
     const dot = src && src.dot, chain = src && src.chain;
+    // shadow clone hits are 'quiet': no hitstop or shake (four clones hitting all the time made the game stutter) and fewer particles
+    const ally = !!(src && src.ally);
+    // training-hall fighters read the blow and slip it (not while they are attacking or stunned)
+    if (e.cfg.dodge && src && src.weapon && !dot && !chain && !e.stun && e.state !== 'windup' && !e.pose && e.state !== 'spawn' && this.time > (e.dodgeT || 0) && Math.random() < e.cfg.dodge) {
+      e.dodgeT = this.time + 1.3;
+      const l = Math.hypot(dx, dy) || 1, side = Math.random() < 0.5 ? 1 : -1;
+      e.kvx += (-dy / l) * side * 7 + (dx / l) * 2; e.kvy += (dx / l) * side * 7 + (dy / l) * 2;
+      this.fx.text(e.x, e.y, '見切 Evade', '#cfe8ff', 12);
+      this.particles.burst('dust', e.x, e.y, 0.1, 5, 2, 0.4, 4, '#d8d0c0', { under: true });
+      sfx.dash();
+      return;
+    }
     // front shield: weapon hits from the front are mostly blocked until the shield breaks
     let blocked = false;
     const S = e.shield;
@@ -683,7 +947,7 @@ export class Game {
         blocked = true;
         S.log = S.log.filter((l) => this.time - l.t < SHIELD.burstWindow);
         S.log.push({ t: this.time, d: dmg });
-        if (src.melee) S.melee++;
+        if (src.melee) S.melee += src.shieldHits || 1; // a shield bash counts double
         const burst = S.log.reduce((a, l) => a + l.d, 0);
         dmg = Math.max(1, Math.round(dmg * (1 - SHIELD.block)));
         knock *= 0.3; stun = 0;
@@ -697,12 +961,27 @@ export class Game {
       dmg = Math.max(1, Math.round(dmg * 0.4));
       if (Math.random() < 0.15) this.fx.text(e.x, e.y, 'Guarded', '#ffd76a', 12);
     }
+    // Hunter's Mark: a marked enemy takes more from every other source
+    if (e.markT > 0 && !(src && src.mark)) dmg = Math.max(1, Math.round(dmg * (e.markMul || 1.2)));
     e.hp -= dmg;
     this.runStats.damage += dmg;
+    if (src && !dot) {
+      if (src.mark) { e.markT = src.mark; e.markMul = src.markMul || 1.2; }
+      if (src.entangle) { // harpoon: pinned in place (bosses: slowed)
+        if (!e.boss) { e.stun = Math.max(e.stun, src.entangle); e.poiseT = src.entangle + 0.8; e.rootT = src.entangle; }
+        else { e.slow = Math.max(e.slow, src.bossSlow || 0.5); e.slowT = Math.max(e.slowT, src.entangle * 2); }
+      }
+      if (crit && src.player && src.weapon && src.player.art) { // Nerve Strike: crits stun (bosses: slowed)
+        const N = src.player.art(src.weapon, 'nerveStrike');
+        if (N && !e.boss) { e.stun = Math.max(e.stun, N.dur); e.poiseT = N.dur + 0.5; }
+        else if (N) { e.slow = Math.max(e.slow, N.bossSlow); e.slowT = Math.max(e.slowT, 1); }
+      }
+    }
     if (dot) {
       this.fx.text(e.x, e.y, `${dmg}`, '#9be86a', 11);
     } else {
       e.flash = 0.09;
+      if (src && src.shudder) e.shudder = Math.max(e.shudder || 0, src.shudder); // crossbow bolts: the target shudders
       if (!e.boss) {
         e.kvx += dx * knock; e.kvy += dy * knock;
         // Light hits only flinch. Only heavy hits (stun >= 0.3) interrupt attacks,
@@ -712,12 +991,16 @@ export class Game {
       }
       this.fx.text(e.x, e.y, crit ? `${dmg}!` : `${dmg}`, blocked ? '#9aa4b4' : chain ? '#fff27a' : crit ? '#ffd34a' : '#ffffff', blocked ? 12 : crit ? 19 : chain ? 12 : 14, crit && !blocked);
       const z = e.boss ? 1.2 : 0.6;
-      this.particles.burst('spark', e.x, e.y, z, crit ? 9 : 5, crit ? 8 : 5, 0.22, crit ? 2 : 1.4, chain ? '#fff6a0' : crit ? '#ffe680' : '#ffffff');
-      if (!chain) this.particles.burst('blood', e.x, e.y, z, 4, 3, 0.45, 2.2, e.type === 'kappa' ? '#2a6a3a' : e.type === 'oni' || e.type === 'oni_lord' ? '#3a0a3a' : '#7a1020', { grav: 10 });
-      if (crit) { sfx.crit(); this.hitstop(0.035); this.shake(2.5); } else if (!chain) sfx.hit();
+      this.particles.burst('spark', e.x, e.y, z, ally ? 3 : crit ? 9 : 5, crit ? 8 : 5, 0.22, crit ? 2 : 1.4, chain ? '#fff6a0' : crit ? '#ffe680' : '#ffffff');
+      if (!chain) this.particles.burst('blood', e.x, e.y, z, ally ? 2 : 4, 3, 0.45, 2.2, e.type === 'dummy' ? '#d8b46a' : e.type === 'kappa' ? '#2a6a3a' : e.type === 'oni' || e.type === 'oni_lord' ? '#3a0a3a' : '#7a1020', { grav: 10 });
+      const snd = src && src.sound; // each weapon's own hit sound
+      if (crit) { sfx.crit(); if (!ally) { this.hitstop(0.035); this.shake(2.5); } } else if (!chain) (snd && sfx[snd] ? sfx[snd]() : sfx.hit());
       if (src && src.weapon && !chain) this.applyElements(e, dmg, src);
     }
-    if (e.hp <= 0) this.killEnemy(e, dx, dy);
+    if (src && src.player) { e.killer = src.player; e.killWeapon = src.weapon || null; e.lastHitT = this.time; }
+    if (e.type === 'dummy') { e.data.lastHit = this.time; if (this.trainingStats) { this.trainingStats.log.push([this.time, dmg]); this.trainingStats.total += dmg; } if (e.hp <= 0) { e.hp = e.hpMax; this.fx.text(e.x, e.y, 'Reset', '#cfe8ff', 13); } }
+    if (e.hp <= 0 && !e.dead && src && src.player && src.player.onKill) src.player.onKill(e, src);
+    if (e.hp <= 0) this.killEnemy(e, dx, dy, ally);
   }
 
   breakShield(e) {
@@ -736,16 +1019,16 @@ export class Game {
     const M = (src.player && src.player.elemMul) || 1; // Elemental Covenant
     if (el.syphon > 0 && src.player) { // lifesteal: heal for a share of the damage dealt (fractions carry over)
       const P = src.player;
-      // Lifebinder: the heal goes to the partner instead (x1.2)
+      // Lifebinder: the heal goes to the partner instead (x1.5)
       const to = P.lifebinder ? this.players.find((q) => q !== P && q.active) : P;
-      P.syphonAcc = (P.syphonAcc || 0) + dmg * Math.min(ELEMENTS.syphon.cap, el.syphon * M) * (P.lifebinder ? 1.2 : 1);
+      P.syphonAcc = (P.syphonAcc || 0) + dmg * Math.min(ELEMENTS.syphon.cap, el.syphon * M) * (P.lifebinder ? 1.5 : 1);
       if (P.syphonAcc >= 1) {
         const n = Math.floor(P.syphonAcc); P.syphonAcc -= n;
         if (to && to.heal(n) > 0 && Math.random() < 0.5) this.particles.emit('glow', to.x, to.y, 0.8, 0, 0, 0.8, 0.5, 2.2, '#ff6b8a');
       }
     }
     if (el.poison > 0) {
-      const dps = el.poison * M * src.player.stats.baseDamage;
+      const dps = el.poison * M * src.player.stats.baseDamage * (src.player.adminMul || 1);
       e.poison = { dps: Math.max(dps, e.poison ? e.poison.dps : 0), t: R.poisonDur, tick: e.poison ? e.poison.tick : R.poisonTick, player: src.player };
     }
     if (el.ice > 0) {
@@ -765,14 +1048,14 @@ export class Game {
         if (!best) break;
         hit.add(best);
         this.fx.bolt(from.x, from.y, from.boss ? 1.2 : 0.6, best.x, best.y, best.boss ? 1.2 : 0.6);
-        this.damageEnemy(best, Math.max(1, Math.round(dmg * R.chainDamage)), false, 0, 0, 0.5, 0, { chain: true, player: src.player });
+        this.damageEnemy(best, Math.max(1, Math.round(dmg * chainDamageFor(el.lightning))), false, 0, 0, 0.5, 0, { chain: true, player: src.player });
         from = best;
       }
       if (hit.size > 1) sfx.zap();
     }
   }
 
-  killEnemy(e, dx = 0, dy = 0) {
+  killEnemy(e, dx = 0, dy = 0, quiet = false) {
     if (e.dead) return;
     if (e.type === 'gensai') { this.gensaiDown(e); return; }
     e.dead = true; e.deathT = 0; e.tele = null; e.hidden = false; e.vx = dx * 2; e.vy = dy * 2; e.poison = null;
@@ -784,7 +1067,7 @@ export class Game {
     else if (bi === 1) this.particles.burst('leaf', e.x, e.y, 0.8, 10, 3, 2, 2.8, '#e0542c');
     else this.particles.burst('ember', e.x, e.y, 0.8, 14, 3, 1.2, 2.2, '#ff8a30');
     this.decals.add(e.x, e.y, e.boss ? 1 : 0.45, e.type === 'kappa' ? 'rgba(30,70,40,1)' : 'rgba(60,10,25,1)');
-    this.hitstop(e.boss ? 0.2 : 0.025);
+    if (e.boss || !quiet) this.hitstop(e.boss ? 0.2 : 0.025);
     this.dropLoot(e);
     if (e.boss) {
       this.shake(18); this.slow(1.6, 0.2); sfx.explode(); sfx.bossRoar();
@@ -793,6 +1076,7 @@ export class Game {
       this.hazards.length = 0;
       for (const q of this.projectiles) if (q.owner === 'enemy') q.dead = true;
     }
+    tryFinisher(this, e); // now and then (and always on a boss) the killer plays a finishing move
   }
 
   // ---------------------------------------------------------------- pickups
@@ -832,7 +1116,7 @@ export class Game {
         if (d < 0.45) {
           k.taken = true;
           if (k.kind === 'heal') { const got = best.heal(k.amt); this.fx.text(best.x, best.y, `+${Math.round(got)}`, '#7dff9a', 16); }
-          else { const b = best.energy; best.energy = Math.min(best.maxEnergy, best.energy + k.amt); this.fx.text(best.x, best.y, `+${Math.round(best.energy - b)} ki`, '#9ee8ff', 16); }
+          else { const b = best.energy; best.energy = Math.min(best.maxEnergy, best.energy + k.amt); this.fx.text(best.x, best.y, `+${Math.round(best.energy - b)} energy`, '#9ee8ff', 16); }
           this.particles.burst('glow', best.x, best.y, 0.7, 12, 2, 0.6, 2.2, k.kind === 'heal' ? '#9dffb0' : '#9ee8ff');
           sfx.chime(0);
         }
@@ -862,7 +1146,7 @@ export class Game {
     const t0 = performance.now();
     this.realTime += dtReal;
     input.poll();
-    if (input.pressed('debug')) this.debug = !this.debug;
+    if (input.pressed('debug') && (this.inRun || !input.pad.connected)) this.debug = !this.debug; // the pad's Back button is SELECT in the menus
 
     switch (this.state) {
       case 'title':
@@ -897,6 +1181,9 @@ export class Game {
         if (client) { if (this.state !== 'transition') this.stepClient(dtReal); } else this.updatePlay(dtReal);
         break;
       }
+      case 'route':
+        this.routeScreen.update(dtReal);
+        break;
       case 'dead': case 'victory':
         this.overlay.updateEnd(dtReal);
         this.updateWorldAmbient(dtReal);
@@ -904,10 +1191,17 @@ export class Game {
     }
     if (this.online && this.state !== 'title') this.online.update(dtReal);
     this.updateMusic();
+    this.updateTenseVis(dtReal);
     for (let i = this.banners.length - 1; i >= 0; i--) { const b = this.banners[i]; b.t += dtReal; if (b.t >= b.dur) this.banners.splice(i, 1); }
     if (this.fadeDir) {
       this.fade = clamp(this.fade + (this.fadeDir * dtReal) / 0.5, 0, 1);
-      if (this.fadeDir > 0 && this.fade >= 1) { this.fadeDir = 0; if (this.state === 'transition' && this.role !== 'client') { this.state = 'play'; this.loadLevel(this.level + 1); } }
+      if (this.fadeDir > 0 && this.fade >= 1) {
+        this.fadeDir = 0;
+        if (this.state === 'transition' && this.role !== 'client') {
+          if (this.routeNext === this.level + 1) { this.routeNext = 0; this.state = 'play'; if (this.level + 1 === 11) this.playArea2(); else this.loadLevel(this.level + 1); }
+          else this.openRoute();
+        }
+      }
       else if (this.fadeDir < 0 && this.fade <= 0) this.fadeDir = 0;
     }
     this.screenFlashA = Math.max(0, this.screenFlashA - dtReal * 3);
@@ -984,7 +1278,12 @@ export class Game {
       for (const p of P) {
         if (!p.active || p.z >= 0.3 || a.z >= 0.3) continue;
         const dx = a.x - p.x, dy = a.y - p.y, rr = a.r + p.r, d2 = dx * dx + dy * dy;
-        if (d2 < rr * rr && d2 > 1e-6) { const d = Math.sqrt(d2); const push = rr - d; if (a.boss) { p.x -= (dx / d) * push; p.y -= (dy / d) * push; } else { a.x += (dx / d) * push; a.y += (dy / d) * push; } }
+        // overlapping bodies: the enemy gives way only a little (heavies and shield walls barely), the player is held back
+        if (d2 < rr * rr && d2 > 1e-6) {
+          const d = Math.sqrt(d2), push = rr - d, give = a.boss ? 0 : a.cfg.heavy || a.cfg.behavior === 'shieldTank' ? 0.1 : 0.3;
+          a.x += (dx / d) * push * give; a.y += (dy / d) * push * give;
+          p.x -= (dx / d) * push * (1 - give); p.y -= (dy / d) * push * (1 - give);
+        }
       }
     }
     for (let i = E.length - 1; i >= 0; i--) if (E[i].dead && E[i].deathT > 1.0 && !E[i].kneel) E.splice(i, 1);
@@ -996,8 +1295,17 @@ export class Game {
     this.decals.update(dt); this.fx.update(dt);
 
     const anyAlive = P.some((p) => p.active);
-    if (!this.cleared && this.spawner.done && !E.some((e) => !e.dead) && anyAlive) this.onLevelCleared();
+    if (!this.cleared && this.spawner.done && !E.some((e) => !e.dead) && anyAlive && !P.some((p) => p.finisher)) this.onLevelCleared(); // (a finishing move plays out first)
     if (w.gate.active && this.state === 'play' && P.some((p) => p.active && dist(p.x, p.y, w.gate.x, w.gate.y) < 0.95)) this.enterGate();
+    // library: the first player to reach the desk takes the scroll (the talent cards)
+    if (this.scrollWaiting && this.state === 'play' && (w.library || w.shrine)) {
+      const A = w.library || w.shrine, D = A.desk;
+      if (P.some((p) => p.active && dist(p.x, p.y, D.x, D.y) < 1.5)) {
+        this.scrollWaiting = false; A.taken = true; A.ready = false;
+        sfx.select(); this.particles.burst('glow', D.x, D.y, 1.0, 16, 2, 0.9, 2.2, '#ffe6a0');
+        this.offerBlessings(0.3, true);
+      }
+    }
 
     this.updateCamera(dt);
   }
@@ -1024,13 +1332,18 @@ export class Game {
     // camera: follow the players (with aim lead in solo), zoom out a bit when co-op partners split up
     let [tx, ty] = this.playersCenter();
     if (P.length === 1) { const p = P[0]; tx += (p.aimX - p.aimY) * 32 * 1.1; ty += (p.aimX + p.aimY) * 16 * 1.1; }
-    let zoom = 1;
+    // tense: the camera leans in a little; low health: up to 14% closer
+    let zoom = (1 + 0.04 * ease.inOutSine(this.tenseVis || 0)) * (1 + 0.24 * ease.inOutSine(this.lowVis || 0));
     if (P.length > 1 && !P[0].dead && !P[1].dead) {
+      // co-op: never closer than what keeps both players on screen (inside the cinematic bars too)
+      const bars = 1 - 2 * 0.07 * (this.lowVis || 0);
       const sepX = Math.abs(isoX(P[0].x, P[0].y) - isoX(P[1].x, P[1].y)) * this.view.baseS / (this.view.W * 0.75);
-      const sepY = Math.abs(isoY(P[0].x, P[0].y) - isoY(P[1].x, P[1].y)) * this.view.baseS / (this.view.H * 0.7);
-      zoom = clamp(1 / Math.max(1, sepX, sepY), 0.62, 1);
+      const sepY = Math.abs(isoY(P[0].x, P[0].y) - isoY(P[1].x, P[1].y)) * this.view.baseS / (this.view.H * 0.7 * bars);
+      zoom = clamp(Math.min(zoom, 1 / Math.max(1e-3, sepX, sepY)), 0.62, zoom);
     }
-    this.cam.zoom = lerp(this.cam.zoom, zoom, 1 - Math.exp(-3 * dt));
+    const fp = P.find((p) => p.finisher);
+    if (fp) { const T = fp.finisher.T, mx = (fp.x + T.x) / 2, my = (fp.y + T.y) / 2; tx = isoX(mx, my); ty = isoY(mx, my) - 18; zoom *= 1.15; }
+    this.cam.zoom = lerp(this.cam.zoom, zoom, 1 - Math.exp(-(fp ? 6 : 3) * dt));
     this.view.s = this.view.baseS * this.cam.zoom;
     this.moveCamera(tx, ty, dt);
   }
@@ -1076,7 +1389,7 @@ export class Game {
     for (const e of this.enemies) e.drawTelegraph(ctx, t);
     for (const e of this.enemies) e.drawShadow(ctx);
     for (const p of this.players) p.drawShadow(ctx);
-    for (const p of this.players) if (!p.remote && !p.puppet) p.drawChargeIndicator(ctx); // only on the shooter's own screen
+    for (const p of this.players) if (!p.remote && !p.puppet) { p.drawAimGuide(ctx); p.drawChargeIndicator(ctx); } // only on the shooter's own screen
     drawProjectileShadows(ctx, this.projectiles);
 
     // depth-sorted drawables; props in front of a player fade out
@@ -1087,10 +1400,12 @@ export class Game {
       if (bx > v.x1 || bx + bw < v.x0 || by > v.y1 || by + bh < v.y0) continue;
       const d = w.depthOf(pr);
       let alpha = 1;
-      if (pr.kind === 'house' || pr.kind === 'tree' || pr.kind === 'bamboo' || pr.kind === 'torii' || pr.kind === 'banner') {
+      if (pr.kind === 'house' || pr.kind === 'tree' || pr.kind === 'bamboo' || pr.kind === 'torii' || pr.kind === 'banner' || pr.kind === 'temple' || pr.kind === 'libroof') {
         for (const p of pls) {
           const psx = isoX(p.x, p.y), psy = isoY(p.x, p.y) - 20;
           if (d > p.x + p.y && psx > bx && psx < bx + bw && psy > by && psy < by + bh) alpha = 0.42;
+          // the library roof lifts away while someone is inside (or right under its eaves)
+          if (pr.kind === 'libroof' && p.x > pr.x0 - 0.8 && p.x < pr.x1 + 0.8 && p.y > pr.y0 - 0.8 && p.y < pr.y1 + 0.8) alpha = 0.14;
         }
       }
       items.push({ d, draw: () => { ctx.globalAlpha = alpha; w.drawProp(ctx, pr, t); ctx.globalAlpha = 1; } });
@@ -1125,6 +1440,8 @@ export class Game {
     w.drawFog(ctx, v, t);
     w.drawWeather(ctx, v, t);
     w.drawGrade(ctx, v);
+    if (this.tenseVis > 0.01 || this.tenseEmbers.length) drawTenseOverlay(ctx, this);
+    drawCinemaBars(ctx, this);
     if (this.warpT > 0) { // slowed time: cool tint and soft dark edges
       const a = Math.min(1, this.warpT * 4) * 0.22;
       ctx.fillStyle = `rgba(60,90,160,${a})`; ctx.fillRect(0, 0, v.W, v.H);
@@ -1144,9 +1461,13 @@ export class Game {
     if (this.state === 'title') this.menu.draw(ctx);
     else {
       if (this.state === 'intro') drawBossIntro(ctx, this);
-      else if (this.state !== 'dead' && this.state !== 'victory') drawHUD(ctx, this);
-      drawBanners(ctx, this);
+      const onMap = this.state === 'route' || (this.state === 'transition' && this.routeNext);
+      if (this.teaHouse && !onMap && this.state !== 'intro') { ctx.save(); ctx.globalAlpha = Math.min(1, (this.realTime - this.teaHouse.start) / 0.6); drawTeaHouse(ctx, this, this.realTime); ctx.restore(); }
+      if (this.state !== 'intro' && this.state !== 'dead' && this.state !== 'victory' && !onMap) drawHUD(ctx, this);
+      if (this.training && this.state === 'play') this.drawTrainingPanel(ctx);
+      if (!this.paused) drawBanners(ctx, this); // (no banners over the pause screen)
       if (this.state === 'cards') this.cards.draw(ctx);
+      if (onMap) this.routeScreen.draw(ctx);
       if (this.dialogue) this.dialogue.draw(ctx);
       if (this.paused) this.overlay.drawPause(ctx);
       if (this.state === 'dead') this.overlay.drawEnd(ctx, false);

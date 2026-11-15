@@ -121,7 +121,7 @@ export class Dialogue {
     this.box(ctx, bx, by, bw, bh, u, true);
     // name plate on the speaker's side
     ctx.font = `${Math.round(20 * u)}px ${FONT}`;
-    const name = `${C.jp ? C.jp + ' ' : ''}${C.name}`;
+    const name = L.name || `${C.jp ? C.jp + ' ' : ''}${C.name}`; // a line can name its speaker (a temple monk's own name)
     const nw = ctx.measureText(name).width + 28 * u, nh = 34 * u;
     const nx = C.side === 'right' ? bx + bw - nw - 14 * u : bx + 14 * u;
     this.box(ctx, nx, by - nh + 6 * u, nw, nh, u, true, C.side === 'right' ? '#5a1424' : '#1a2a5a');

@@ -82,6 +82,27 @@ export const SCRIPTS = {
   ],
 
   // ------------------------------------------------ area 2: wild yokai
+  // cutscene before level 11 (cutscene2.js): walking out of the rice fields into Momiji Pass.
+  // at: the line waits until the players have walked that far; delay: seconds before the box shows
+  area2: [
+    { who: 'kage', at: 0.42, text: 'The rice fields end here. Gensai\'s hunters won\'t follow us into the mountains.' },
+    { who: 'kaze', coop: true, text: 'Momiji Pass… they say only yokai and wild things live past the old marker.' },
+    { who: 'kage', at: 1.22, text: 'Momiji Pass. Master Soen walked this road once, long before there was a regent.' },
+    { who: 'kaze', coop: true, at: 1.62, text: 'Even the deer keep their distance. Out here we are just two more wanderers.' },
+    { who: 'kage', solo: true, at: 1.62, text: 'Even the deer keep their distance. Out here I am just one more wanderer.' },
+    { who: 'kage', at: 2.0, text: 'We will not stop. Not for hunters, not for yokai, not for the regent\'s armies.' },
+    { who: 'kaze', coop: true, text: 'Not until we stand in the Kagero halls again.' },
+    { who: 'kage', text: '…and the honor of our clan is restored. I swear it on Master Soen\'s name.' },
+    { who: 'tengu', act: 'tengu', delay: 1.9, text: 'KRAAA! Kaa! Kaa-kaa!' },
+    { who: 'kage', text: 'A tengu…!' },
+    { who: 'tengu', text: 'Kaa… little shadows, strolling into my mountains as if they owned them. Kraa-ha-ha!' },
+    { who: 'tengu', text: 'Climb, then! Climb to my peak… kaa… and I will pluck the feathers from your pride!' },
+    { who: 'tengu', act: 'tenguLeave', text: 'KAAA-KAAA!' },
+    { who: 'kaze', coop: true, delay: 1.4, text: 'He flew toward the peak. Every yokai in this pass must answer to him.' },
+    { who: 'kage', solo: true, delay: 1.4, text: 'Toward the peak. Every yokai in this pass must answer to him.' },
+    { who: 'kage', act: 'walkOn', coop: true, text: 'Then the peak is where we are going. Come on, Kaze.' },
+    { who: 'kage', act: 'walkOn', solo: true, text: 'Then the peak is where I am going.' },
+  ],
   level11: [
     { who: 'kage', text: 'Momiji Pass. No hunter follows this far. Only yokai… and the wind.' },
     { who: 'kaze', coop: true, text: 'The yokai don\'t care whose side we are on. Stay sharp.' },
@@ -147,11 +168,31 @@ export const SCRIPTS = {
   monk0: [{ who: 'monk0', text: '…The flute gives its breath and asks nothing back. Give something, and walk lighter.' }],
   monk1: [{ who: 'monk1', text: 'Heh! An exile with a fat purse of pride! Trade me a little of it for some real strength, eh?' }],
   monk2: [{ who: 'monk2', text: 'I too served the Kagero, until the regent\'s fire took me. Take my bargain… and finish what I could not.' }],
+  // the same monks at their own temples ({name} = the monk's name, {temple} = 'Temple of …')
+  temple0: [
+    { who: 'monk0', text: '…You cleared the steps of the {temple}. I am {name}. The flute kept silent while you fought.' },
+    { who: 'monk0', text: 'The flute gives its breath and asks nothing back. Give something here, and walk lighter.' },
+  ],
+  temple1: [
+    { who: 'monk1', text: 'Heh! Swept my courtyard clean, did you? Welcome to the {temple}! Old {name} thanks you!' },
+    { who: 'monk1', text: 'Now then, an exile with a fat purse of pride… trade me a little of it for some real strength, eh?' },
+  ],
+  temple2: [
+    { who: 'monk2', text: 'The {temple} has not heard a living voice in years. I am {name}… what is left of him.' },
+    { who: 'monk2', text: 'I too served the Kagero, until the regent\'s fire took me. Take my bargain… and finish what I could not.' },
+  ],
 };
 
 // the lines of a script for this team (co-op/solo filtered, 'ally' resolved)
-export function storyLines(id, coop) {
+// vars: {key: value} fills {key} in the text; vars.names = {who: plate name} renames a speaker
+export function storyLines(id, coop, vars = null) {
   const S = SCRIPTS[id];
   if (!S) return [];
-  return S.filter((l) => (!l.coop || coop) && (!l.solo || !coop)).map((l) => ({ ...l, who: l.who === 'ally' ? (coop ? 'kaze' : 'kage') : l.who }));
+  const fill = (t) => (vars ? t.replace(/\{(\w+)\}/g, (m, k) => (vars[k] !== undefined ? vars[k] : m)) : t);
+  return S.filter((l) => (!l.coop || coop) && (!l.solo || !coop)).map((l) => {
+    const who = l.who === 'ally' ? (coop ? 'kaze' : 'kage') : l.who;
+    const out = { ...l, who, text: fill(l.text) };
+    if (vars && vars.names && vars.names[who]) out.name = vars.names[who];
+    return out;
+  });
 }

@@ -7,8 +7,9 @@ export const STAT_STYLE = {
   critChance:   { color: '#ffd23f', short: 'CRIT' },
   critDamage:   { color: '#ff9a3c', short: 'CRIT DMG' },
   moveSpeed:    { color: '#5fe0b0', short: 'MOVE' },
-  dashCooldown: { color: '#b9a0ff', short: 'DASH' },
-  energyRegen:  { color: '#4fc8dc', short: 'KI' },
+  cooldown:     { color: '#b9a0ff', short: 'COOLDOWN' },
+  energyRegen:  { color: '#4fc8dc', short: 'ENERGY' },
+  kiCost:       { color: '#8fa8ff', short: 'ENERGY USE' },
   healthRegen:  { color: '#8ee06a', short: 'REGEN' },
 };
 export const isStat = (k) => !!STAT_STYLE[k];
@@ -40,8 +41,6 @@ export function drawStatGlyph(ctx, stat, s, color) {
       ctx.beginPath();
       for (let i = 0; i < 16; i++) { const a = (i / 16) * TAU, r = i % 2 ? 13 : 30; ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r); }
       ctx.closePath(); ctx.fill();
-      ctx.globalCompositeOperation = 'destination-out';
-      ctx.lineWidth = 7; ctx.beginPath(); ctx.moveTo(-30, 22); ctx.lineTo(30, -22); ctx.stroke();
       break;
     }
     case 'attackSpeed': { // three stacked slashes
@@ -53,11 +52,10 @@ export function drawStatGlyph(ctx, stat, s, color) {
       for (const x of [-14, 8]) { ctx.beginPath(); ctx.moveTo(x - 10, -24); ctx.lineTo(x + 6, -24); ctx.lineTo(x + 22, 0); ctx.lineTo(x + 6, 24); ctx.lineTo(x - 10, 24); ctx.lineTo(x + 6, 0); ctx.closePath(); ctx.fill(); }
       break;
     }
-    case 'dashCooldown': { // hourglass with a dash streak
-      ctx.beginPath(); ctx.moveTo(-14, -28); ctx.lineTo(18, -28); ctx.lineTo(4, -1); ctx.lineTo(18, 28); ctx.lineTo(-14, 28); ctx.lineTo(0, -1); ctx.closePath();
-      ctx.lineWidth = 6; ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(-8, 26); ctx.lineTo(12, 26); ctx.lineTo(2, 12); ctx.closePath(); ctx.fill();
-      ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(-30, -6); ctx.lineTo(-16, -6); ctx.moveTo(-30, 6); ctx.lineTo(-20, 6); ctx.stroke();
+    case 'cooldown': { // an hourglass
+      ctx.beginPath(); ctx.moveTo(-16, -28); ctx.lineTo(16, -28); ctx.lineTo(2, -1); ctx.lineTo(16, 28); ctx.lineTo(-16, 28); ctx.lineTo(-2, -1); ctx.closePath();
+      ctx.lineWidth = 6; ctx.lineJoin = 'round'; ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(-10, 26); ctx.lineTo(10, 26); ctx.lineTo(0, 12); ctx.closePath(); ctx.fill();
       break;
     }
     case 'energyRegen': { // ki: an inward spiral (uzumaki)
@@ -67,10 +65,15 @@ export function drawStatGlyph(ctx, stat, s, color) {
       ctx.stroke();
       break;
     }
-    case 'healthRegen': { // lotus: round petals rising from a water line
-      const petal = (a, len, wid) => { ctx.save(); ctx.translate(0, 14); ctx.rotate(a); ctx.beginPath(); ctx.moveTo(0, 0); ctx.bezierCurveTo(-wid, -len * 0.35, -wid * 0.6, -len, 0, -len); ctx.bezierCurveTo(wid * 0.6, -len, wid, -len * 0.35, 0, 0); ctx.fill(); ctx.restore(); };
-      petal(-1.05, 26, 11); petal(1.05, 26, 11); petal(-0.5, 36, 14); petal(0.5, 36, 14); petal(0, 42, 15);
-      ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(-28, 24); ctx.quadraticCurveTo(0, 30, 28, 24); ctx.stroke();
+    case 'kiCost': { // ki focus: a ki flame with a downward arrow beside it
+      ctx.beginPath(); ctx.moveTo(0, -30); ctx.bezierCurveTo(14, -14, 20, -2, 20, 10); ctx.bezierCurveTo(20, 24, 6, 30, 0, 30);
+      ctx.bezierCurveTo(-6, 30, -20, 24, -20, 10); ctx.bezierCurveTo(-20, -2, -14, -14, 0, -30); ctx.closePath(); ctx.fill();
+      break;
+    }
+    case 'healthRegen': { // a heart
+      ctx.beginPath(); ctx.moveTo(0, 30);
+      ctx.bezierCurveTo(-12, 20, -36, 4, -34, -12); ctx.bezierCurveTo(-32, -30, -8, -32, 0, -14);
+      ctx.bezierCurveTo(8, -32, 32, -30, 34, -12); ctx.bezierCurveTo(36, 4, 12, 20, 0, 30); ctx.closePath(); ctx.fill();
       break;
     }
   }

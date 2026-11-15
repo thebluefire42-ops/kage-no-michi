@@ -1,10 +1,10 @@
 // Enemy AI (shared behaviour types + heavy abilities + bosses) and per-enemy looks.
 import { TAU, clamp, lerp, rand, pick, angDiff } from './util.js';
-import { BOSS_DMG, PLAYER_STUN, GENSAI_GUARD } from './config.js';
+import { BOSS_DMG, PLAYER_STUN, GENSAI_GUARD, SUMO, PLAYER_BASE } from './config.js';
 import { sfx } from './audio.js';
 import { Enemy, slamAt } from './enemies.js';
 import { drawKappa } from './rig.js';
-import { drawWeasel, drawTanuki, drawBoar, drawKomainu, drawWisp, drawGasha } from './creatures.js';
+import { drawWeasel, drawTanuki, drawBoar, drawKomainu, drawWisp, drawGasha, drawDummy } from './creatures.js';
 
 const slashA = (wx, wy) => Math.atan2(((wx + wy) * 16) / 0.55, (wx - wy) * 32);
 const ringHazard = (g, x, y, max, dmg, speed = 8) => g.hazards.push({ kind: 'ring', x, y, rad: 0.5, speed, max, width: 0.45, dmg, hit: false, gap: null });
@@ -27,6 +27,15 @@ const SMOKE = { assassin: 'rgba(50,30,70,1)', kitsune: 'rgba(255,170,70,1)', yuk
 const PROJ_SPEED = { arrow: 12, dart: 13, icearrow: 11 };
 
 export const BEHAVIORS = {
+  // the training dummy: stands still, can't be knocked away, and heals to full after a few quiet seconds
+  dummy: {
+    init: (e) => { e.knockResist = 0; e.data.lastHit = -99; },
+    think: (e, dt, g) => {
+      e.vx = 0; e.vy = 0; e.faceX = 1; e.faceY = 1;
+      if (e.hp < e.hpMax && g.time - e.data.lastHit > e.cfg.resetAfter) { e.hp = e.hpMax; g.fx.text(e.x, e.y, 'Reset', '#cfe8ff', 13); }
+    },
+    strike: () => {},
+  },
   melee: {
     think: (e, dt, g) => meleeThink(e, dt, g),
     strike: (e, g) => {
@@ -38,14 +47,14 @@ export const BEHAVIORS = {
   lunge: {
     think: (e, dt, g) => {
       const [dx, dy, d] = e.toPlayer(); e.face(dx, dy);
-      if (d < e.cfg.range && e.atkCd <= 0) { e.windup(e.cfg.windup, { kind: 'line', len: e.cfg.range + 0.7, width: 0.6, angle: Math.atan2(dy, dx) }); return; }
+      if (d < e.cfg.range && e.atkCd <= 0) { e.windup(e.cfg.windup, { kind: 'line', len: e.cfg.range + 0.7, width: 0.8, angle: Math.atan2(dy, dx) }); return; }
       e.steer(dx, dy, d < 1.6 ? -0.5 : 1, dt);
     },
     strike: (e) => { const s = e.cfg.lungeSpeed || 15; e.state = 'lunge'; e.t = 0.18; e.data.hit = false; e.vx = e.faceX * s; e.vy = e.faceY * s; sfx.dash(); },
     custom: (e, dt, g) => {
       if (e.state !== 'lunge') return;
       e.t -= dt;
-      if (!e.data.hit && e.hurtPlayerIfIn(1.1, TAU, e.dmg, 7)) e.data.hit = true;
+      if (!e.data.hit && e.hurtInLane(1.1, e.dmg, 7)) e.data.hit = true;
       if (Math.random() < 0.6) {
         if (e.type === 'kamaitachi') g.particles.emit('leaf', e.x, e.y, 0.5, rand(-1, 1), rand(-1, 1), 0.5, 0.5, 2.5, '#f4f8ff', { drag: 2 });
         else if (e.type === 'ghostspear') g.particles.emit('glow', e.x, e.y, 0.6, 0, 0, 0.2, 0.4, 3, '#9ec8ff');
@@ -190,7 +199,7 @@ export const BEHAVIORS = {
     custom: (e, dt, g) => {
       if (e.state !== 'charge') return;
       e.t -= dt;
-      if (!e.data.hit && e.hurtPlayerIfIn(1.2, TAU, e.dmg * 0.8, 9)) e.data.hit = true;
+      if (!e.data.hit && e.hurtInLane(1.2, e.dmg * 0.8, 9)) e.data.hit = true;
       if (Math.random() < 0.7) g.particles.emit('dust', e.x, e.y, 0.05, rand(-0.5, 0.5), rand(-0.5, 0.5), 0.3, 0.5, 5, '#c8b8a8', { under: true });
       if (e.t <= 0) { e.state = 'recover'; e.t = e.cfg.recover; e.vx *= 0.2; e.vy *= 0.2; }
     },
@@ -244,27 +253,36 @@ export const BEHAVIORS = {
   },
 
   // ================================================================ heavy ability enemies
-  // Sumo Brute: belly charge, then a stomp that sends out a shockwave ring
+  // Sumo Brute: a belly charge down the red lane, then a stomp inside the telegraphed circle.
+  // The charge only hits what is in front of him inside that lane (never beside or behind him),
+  // and the lane is exactly as long as the charge travels.
   sumo: {
     think: (e, dt, g) => {
       const [dx, dy, d] = e.toPlayer(); e.face(dx, dy);
-      if (e.atkCd <= 0 && d < 6) { e.windup(e.cfg.windup, { kind: 'line', len: 5.5, width: 1.4, angle: Math.atan2(dy, dx) }, 'windup', 'charge'); return; }
+      const S = SUMO, len = S.speed * S.dur + e.r + PLAYER_BASE.radius; // how far his belly reaches a player's body
+      if (e.atkCd <= 0 && d < len) { e.windup(e.cfg.windup, { kind: 'line', len, width: S.width, angle: Math.atan2(dy, dx) }, 'windup', 'charge'); return; }
       e.steer(dx, dy, 1, dt);
     },
     strike: (e, g, next) => {
-      if (next === 'charge') { e.state = 'charge'; e.t = 0.55; e.data.hit = false; e.vx = e.faceX * 9; e.vy = e.faceY * 9; sfx.heavy(); }
+      const S = SUMO;
+      if (next === 'charge') { e.state = 'charge'; e.t = S.dur; e.data.hit = false; e.data.dir = [e.faceX, e.faceY]; e.vx = e.faceX * S.speed; e.vy = e.faceY * S.speed; sfx.heavy(); }
       else if (next === 'stomp') {
-        slamAt(g, e.x, e.y, 2.3, e.dmg, e);
-        ringHazard(g, e.x, e.y, 4.2, Math.round(e.dmg * 0.6), 8);
+        slamAt(g, e.x, e.y, S.stompR, e.dmg, e);
         e.t = 0.9;
       }
     },
     custom: (e, dt, g) => {
       if (e.state !== 'charge') return;
+      const S = SUMO, [fx, fy] = e.data.dir || [e.faceX, e.faceY];
       e.t -= dt;
-      if (!e.data.hit && e.hurtPlayerIfIn(1.3, TAU, e.dmg * 0.8, 10)) e.data.hit = true;
+      if (!e.data.hit) for (const p of g.players) { // in front of his belly, inside the lane
+        if (!p.active) continue;
+        const dx = p.x - e.x, dy = p.y - e.y, along = dx * fx + dy * fy, side = Math.abs(dx * fy - dy * fx);
+        const L = e.lane, inLane = !L || (() => { const ox = p.x - L.ox, oy = p.y - L.oy, al = ox * L.fx + oy * L.fy; return al > -0.3 && al < L.len + 0.2 && Math.abs(ox * L.fy - oy * L.fx) < L.width / 2 + p.r * 0.6; })();
+        if (inLane && along > -e.r && along < e.r + p.r + 0.15 && side < S.width / 2 + p.r * 0.6 && p.hurt(e.dmg * S.chargeMul, e.x, e.y, 12)) { e.data.hit = true; if (e.cfg.onHit) p.applyChill(e.cfg.onHit.chill, e.cfg.onHit.dur); }
+      }
       if (Math.random() < 0.7) g.particles.emit('dust', e.x, e.y, 0.05, rand(-0.5, 0.5), rand(-0.5, 0.5), 0.3, 0.5, 5, '#c8b088', { under: true });
-      if (e.t <= 0) { e.vx *= 0.2; e.vy *= 0.2; e.windup(0.5, { kind: 'circle', x: e.x, y: e.y, r: 2.3 }, 'windup', 'stomp'); }
+      if (e.t <= 0) { e.vx *= 0.2; e.vy *= 0.2; e.windup(S.stompWindup, { kind: 'circle', x: e.x, y: e.y, r: S.stompR }, 'windup', 'stomp'); }
     },
   },
   // Armored Samurai: two-hit iaido combo, the second cut dashes forward
@@ -288,7 +306,7 @@ export const BEHAVIORS = {
     custom: (e, dt, g) => {
       if (e.state !== 'iaido') return;
       e.t -= dt;
-      if (!e.data.hit && e.hurtPlayerIfIn(1.4, TAU, e.dmg, 9)) e.data.hit = true;
+      if (!e.data.hit && e.hurtInLane(1.4, e.dmg, 9)) e.data.hit = true;
       if (Math.random() < 0.8) g.particles.emit('ink', e.x, e.y, 0.8, 0, 0, 0, 0.3, 5, 'rgba(30,40,70,0.6)');
       if (e.t <= 0) { e.vx *= 0.1; e.vy *= 0.1; g.fx.slash(e.x, e.y, slashA(e.faceX, e.faceY), 1.6, 3.2, 'rgba(220,235,255,0.9)', 16, 0.22); e.state = 'recover'; e.t = 1.0; }
     },
@@ -307,7 +325,7 @@ export const BEHAVIORS = {
     custom: (e, dt, g) => {
       if (e.state === 'charge') {
         e.t -= dt;
-        if (!e.data.hit && e.hurtPlayerIfIn(1.4, TAU, e.dmg, 13)) e.data.hit = true;
+        if (!e.data.hit && e.hurtInLane(1.4, e.dmg, 13)) e.data.hit = true;
         if (Math.random() < 0.8) g.particles.emit('dust', e.x, e.y, 0.05, rand(-0.6, 0.6), rand(-0.6, 0.6), 0.4, 0.5, 6, '#b8a070', { under: true });
         if (g.world.blocked(e.x + e.faceX * 0.9, e.y + e.faceY * 0.9, 0.2)) {
           e.state = 'stunned'; e.t = 1.6; e.vx = e.vy = 0;
@@ -393,15 +411,21 @@ export const BEHAVIORS = {
 
   // ================================================================ BOSS: Ronin Warlord
   ronin_boss: {
-    init: (e) => { e.data.summonCd = 5; e.speed = 2.9; },
+    init: (e) => { e.data.summonCd = 5; e.data.whirlCd = 7; e.speed = 2.9; },
     onSpawn: (e, g) => { sfx.bossRoar(); g.shake(8); },
     think: (e, dt, g) => {
       const [dx, dy, d] = e.toPlayer(); e.face(dx, dy);
       if (e.phase === 1 && e.hp < e.hpMax * 0.5) { e.phase = 2; e.speed = 3.5; sfx.bossRoar(); g.shake(10); g.bossPhase(e, 'The Warlord rages!'); }
-      e.data.summonCd -= dt;
+      e.data.summonCd -= dt; e.data.whirlCd -= dt;
       const p2 = e.phase === 2;
+      // the great whirl: a long, slow wind-up and a huge circle of steel; get out or pay dearly
+      if (e.atkCd <= 0 && e.data.whirlCd <= 0 && d < 5.5) {
+        e.data.whirlCd = p2 ? 9 : 12;
+        e.windup(p2 ? 1.15 : 1.4, { kind: 'circle', x: e.x, y: e.y, r: 5 }, 'iaiCrouch', 'whirl'); sfx.bossRoar(); return;
+      }
       if (p2 && e.data.summonCd <= 0) { e.state = 'summon'; e.t = 0.9; e.data.summonCd = 11; e.vx = e.vy = 0; return; }
       if (e.atkCd <= 0) {
+        if (d < 2.8 && Math.random() < 0.35) { e.data.combo = p2 ? 2 : 1; startRoninDash(e); return; } // close in: sometimes he dashes through you
         if (d < 2.8) { e.windup(p2 ? 0.42 : 0.55, { kind: 'arc', range: 3.0, arc: 3.8, angle: Math.atan2(dy, dx) }, 'windup', 'sweep'); return; }
         if (d < 9) { e.data.combo = p2 ? 4 : 3; startRoninDash(e); return; }
       }
@@ -413,6 +437,12 @@ export const BEHAVIORS = {
         g.fx.slash(e.x, e.y, slashA(e.faceX, e.faceY), 2.4, 3.8, 'rgba(255,220,200,0.85)', 16, 0.22);
         e.hurtPlayerIfIn(3.0, 3.8, BOSS_DMG.ronin_boss.sweep, 7);
         e.t = 0.55;
+      } else if (next === 'whirl') {
+        sfx.heavy(); sfx.slam(); g.shake(12); g.hitstop(0.06);
+        for (let k = 0; k < 3; k++) g.fx.slash(e.x, e.y, k * 2.1, 4.6, 2.3, 'rgba(255,210,190,0.9)', 22, 0.3);
+        g.fx.ring(e.x, e.y, 5, 'rgba(255,200,170,0.9)', 0.45, 7);
+        for (const p of g.players) if (p.active && Math.hypot(p.x - e.x, p.y - e.y) < 5 + p.r * 0.5) p.hurt(BOSS_DMG.ronin_boss.whirl, e.x, e.y, 12);
+        e.t = 0.9;
       } else if (next === 'dash') {
         e.state = 'dash'; e.t = 0.24; e.data.hit = false;
         e.vx = e.faceX * 19; e.vy = e.faceY * 19; sfx.dash();
@@ -421,7 +451,7 @@ export const BEHAVIORS = {
     custom: (e, dt, g) => {
       if (e.state === 'dash') {
         e.t -= dt;
-        if (!e.data.hit && e.hurtPlayerIfIn(1.3, TAU, BOSS_DMG.ronin_boss.dash, 6)) e.data.hit = true;
+        if (!e.data.hit && e.hurtInLane(1.3, BOSS_DMG.ronin_boss.dash, 6)) e.data.hit = true;
         if (Math.random() < 0.8) g.particles.emit('ink', e.x, e.y, 0.8, 0, 0, 0, 0.35, 6, 'rgba(40,20,30,0.6)');
         if (e.t <= 0) {
           e.vx *= 0.1; e.vy *= 0.1;
@@ -564,7 +594,7 @@ export const BEHAVIORS = {
     custom: (e, dt, g) => {
       if (e.state !== 'charge') return;
       e.t -= dt; e.data.trail -= dt;
-      if (!e.data.hit && e.hurtPlayerIfIn(1.6, TAU, BOSS_DMG.oni_lord.charge, 10)) e.data.hit = true;
+      if (!e.data.hit && e.hurtInLane(1.6, BOSS_DMG.oni_lord.charge, 10)) e.data.hit = true;
       if (e.data.trail <= 0) { e.data.trail = 0.12; g.hazards.push({ kind: 'fire', x: e.x, y: e.y, r: 0.8, life: 3, tick: 0, dmg: BOSS_DMG.oni_lord.fire }); }
       if (e.t <= 0) { e.state = 'recover'; e.t = 0.9; e.vx *= 0.1; e.vy *= 0.1; }
     },
@@ -663,7 +693,7 @@ export const BEHAVIORS = {
     custom: (e, dt, g) => {
       if (e.state === 'gdash') {
         e.t -= dt;
-        if (!e.data.hit && e.hurtPlayerIfIn(1.2, TAU, BOSS_DMG.gensai.mirage, 8)) e.data.hit = true;
+        if (!e.data.hit && e.hurtInLane(1.2, BOSS_DMG.gensai.mirage, 8)) e.data.hit = true;
         if (Math.random() < 0.9) g.particles.emit('ink', e.x, e.y, 0.8, 0, 0, 0, 0.35, 6, 'rgba(120,10,30,0.6)');
         if (e.t <= 0) { e.vx *= 0.1; e.vy *= 0.1; e.state = 'recover'; e.t = 0.6; }
       } else if (e.state === 'summon') {
@@ -741,6 +771,16 @@ const P = {
   kg: { skin: '#e2b48c', cloth: '#1e1a22', cloth2: '#6a1420', sash: '#c8a050', hat: '#141218', accent: '#b02030', metal: '#e6edf5', wood: '#3a2418', hood: '#16131a', eye: '#ff6a5a' },
   kgred: { skin: '#e2b48c', cloth: '#6a1420', cloth2: '#1e1a22', sash: '#c8a050', hat: '#141218', accent: '#d8b050', metal: '#e6edf5', wood: '#3a2418' },
   kgmonk: { skin: '#e6c4a0', cloth: '#3a1420', cloth2: '#1a1418', sash: '#d8a838', metal: '#ccc', accent: '#d8a838', wood: '#2a1a12' },
+  // training hall: white and indigo keikogi, black hakama
+  karateka: { skin: '#e2b48c', cloth: '#f2eee2', cloth2: '#d8d2c2', sash: '#1a1414', hair: '#1a1414', accent: '#c8302a', metal: '#ddd' },
+  kenshi: { skin: '#e2b48c', cloth: '#2a3458', cloth2: '#16182a', sash: '#e8e0cc', hair: '#1a1414', accent: '#c8302a', metal: '#e6edf5', wood: '#3a2418' },
+  bojutsu: { skin: '#e2b48c', cloth: '#e8e2d0', cloth2: '#26262e', sash: '#8a5a2a', hair: '#1a1414', accent: '#c8302a', metal: '#ddd', wood: '#8a6a40' },
+  naginata: { skin: '#ecc8a8', cloth: '#f4f0e6', cloth2: '#7a1a24', sash: '#c8a050', hair: '#141016', accent: '#c8302a', metal: '#e6edf5', wood: '#3a2418' },
+  shurikenka: { skin: '#d8b090', cloth: '#2c3036', cloth2: '#1a1c20', sash: '#c8302a', hood: '#22252a', eye: '#ffd070', metal: '#c8ccd4', accent: '#c8302a' },
+  sensei: { skin: '#e6c09c', cloth: '#1e2440', cloth2: '#121426', sash: '#e8e0cc', hair: '#d8d4cc', accent: '#c8a050', metal: '#f0f4f8', wood: '#2a1a12' },
+  // library: scholars in ink-dyed robes
+  scholar: { skin: '#ecc8a0', cloth: '#5a6a5a', cloth2: '#2e3a30', sash: '#c8a050', metal: '#ccc', accent: '#c8a050', wood: '#5a3a20' },
+  sage: { skin: '#e8d0b0', cloth: '#2a2236', cloth2: '#141018', sash: '#8a6ad0', metal: '#ccc', accent: '#b08aff', wood: '#2a1a12' },
   gensai: { skin: '#e6c09c', cloth: '#1c1418', cloth2: '#7a1420', sash: '#d8a838', accent: '#d8a838', metal: '#f0f4f8', mantle: '#8a1022', wood: '#2a1a12' },
 };
 const drawing = (e) => (e.state === 'windup' ? { kind: 'draw', t: 1 - e.t / e.tDur } : null);
@@ -793,6 +833,15 @@ export const LOOKS = {
   kgwall: () => ({ pal: P.kg, head: 'kabuto', armor: true, weapon: 'katana', grip: 'down', s: 1.35, fat: 1.25, h: 76, shieldS: 1.1 }),
   kgmonk: (e) => ({ pal: P.kgmonk, head: 'tokin', robe: true, weapon: 'staff', grip: 'pole', pose: casting(e) }),
   kgchampion: (e) => ({ pal: P.kgred, head: 'kabuto', armor: true, weapon: 'nodachi', grip: 'shoulder', s: 1.5, fat: 1.2, h: 84, pose: e.state === 'iaido' ? { kind: 'thrust', t: 0.5 } : null }),
+  karateka: (e) => ({ pal: P.karateka, head: 'bandana', bareArms: true, weapon: null, s: 1.0, pose: e.state === 'windup' ? { kind: 'thrust', t: 0.3 } : null }),
+  kenshi: () => ({ pal: P.kenshi, head: 'bandana', weapon: 'katana', grip: 'down', backWeapon: 'saya', s: 1.02 }),
+  bojutsu: (e) => ({ pal: P.bojutsu, head: 'bandana', weapon: 'bo', grip: 'pole', pose: e.state === 'lunge' ? { kind: 'boJab', t: 0.6 } : null }),
+  naginata: (e) => ({ pal: P.naginata, head: 'bandana', robe: true, weapon: 'naginata', grip: 'pole', pose: e.state === 'lunge' ? { kind: 'thrust', t: 0.5 } : null }),
+  shurikenka: (e) => ({ pal: P.shurikenka, head: 'mask', weapon: 'kunai', grip: 'down', pose: e.state === 'windup' ? { kind: 'throw', side: 1, t: 1 - e.t / e.tDur } : null }),
+  sensei: (e) => ({ pal: P.sensei, head: 'hermit', weapon: 'nodachi', grip: 'shoulder', s: 1.4, fat: 1.1, h: 80, pose: e.state === 'iaido' ? { kind: 'thrust', t: 0.5 } : null }),
+  scholar: (e) => ({ pal: P.scholar, head: 'tokin', robe: true, weapon: 'spiritorb', grip: 'down', pose: casting(e) }),
+  sage: (e) => ({ pal: P.sage, head: 'hermit', robe: true, weapon: 'staff', grip: 'pole', pose: casting(e) }),
+  dummy: () => ({ draw: drawDummy, h: 72 }),
   gensai: (e) => ({
     pal: P.gensai, head: 'eboshi', armor: true, mantle: true, weapon: 'katana', grip: 'down', s: 1.55, fat: 1.05, h: 88,
     pose: e.kneel ? { kind: 'kneel', t: 1 }

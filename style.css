@@ -4,6 +4,17 @@ html, body {
   overflow: hidden;
   background: #0d0c12;
 }
+/* start-up screen (removed by main.js after the first frame) */
+#loading {
+  position: fixed; inset: 0; z-index: 5;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+  background: #0d0c12; color: #f8f0de;
+  font: 700 22px "Zen Kaku Gothic New", "Yu Gothic", sans-serif;
+}
+#loading .ld-title { font: 800 54px "Shippori Mincho", "Yu Mincho", serif; color: #e8c470; letter-spacing: 0.1em; }
+#loading .ld-dots::after { content: ''; animation: ld-dots 1.2s steps(4) infinite; }
+@keyframes ld-dots { 0% { content: ''; } 25% { content: '.'; } 50% { content: '..'; } 75% { content: '...'; } }
+#loading .ld-err { max-width: min(640px, 90vw); white-space: pre-wrap; font: 600 14px monospace; color: #ffb0a0; text-align: center; }
 .netbox {
   position: fixed;
   left: 50%;

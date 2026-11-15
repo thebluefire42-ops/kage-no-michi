@@ -21,8 +21,8 @@ function encPlayer(p) {
     hp: round(p.hp, 10), en: round(p.energy, 10), dead: p.dead ? 1 : 0, fl: round(p.flash), ifr: round(p.iframes),
     mv: round(p.moveAmt), wk: round(p.walk), as: p.activeSlot, ht: round(p.hurtT), ch: round(p.chillT),
     an: a ? [a.kind, round(a.t), a.side || 0, round(a.dur)] : null,
-    da: d.t > 0 ? [d.type, round(d.t), round(d.dur), round(d.dx), round(d.dy)] : null,
-    sp: p.spin ? 1 : 0, lp: p.leap ? 1 : 0,
+    da: d.t > 0 ? [d.type, round(d.t), round(d.dur), round(d.dx), round(d.dy), round(d.ax ?? d.dx), round(d.ay ?? d.dy)] : null,
+    sp: p.spin ? 1 : 0, lp: p.leap ? 1 : 0, gd: p.guard ? [round(p.guard.t), round(p.guard.dur), round(p.guard.store), round(p.guard.flash)] : 0,
     dn: p.downed ? [round(p.downT), round(p.reviveP)] : 0, rg: round(p.rageT), mh: p.maxHpMul || 1, sac: p.sac, rl: p.returnLevel || 0, ru: p.rushT > 0 ? [round(p.rushT), round(p.rushMul)] : 0,
   };
 }
@@ -35,6 +35,8 @@ function applyPlayerVisual(p, s, snapAll) {
   if (s.da) { p.dash.type = s.da[0]; p.dash.t = s.da[1]; p.dash.dur = s.da[2]; p.dash.dx = s.da[3]; p.dash.dy = s.da[4]; } else p.dash.t = 0;
   p.spin = s.sp ? (p.spin || { t: 0 }) : null;
   p.leap = s.lp ? (p.leap || { t: 0 }) : null;
+  const sw = p.weapons.find((q) => q.key === 'shield');
+  p.guard = s.gd && sw ? { t: s.gd[0], dur: s.gd[1], store: s.gd[2], flash: s.gd[3], w: sw, def: sw.def.special, recent: [] } : null;
 }
 
 const encTele = (T) => (T ? JSON.stringify(T) : 0);
@@ -84,7 +86,7 @@ export class OnlineHost {
     net.on('in', (m) => { const p = this.remote(); if (p && !p.dead) p.applyRemoteState(m); });
     net.on('atk', (m) => { const p = this.remote(); if (p && p.active) p.forceAttack(m.slot, m.special, m.ax, m.ay, m.ch, m.cb); });
     net.on('tal', (m) => { const p = this.remote(); if (p && p.active) p.forceTalent(m.i, m.tx, m.ty); });
-    net.on('pick', (m) => g.onRemotePick(m.index));
+    net.on('pick', (m) => g.onRemotePick(m.index, m.replace));
     net.on('sacpick', (m) => g.onRemoteSacPick(m.key));
     net.on('dlgnext', () => g.onRemoteNext());
     net.on('disconnect', () => {
@@ -107,7 +109,7 @@ export class OnlineHost {
       obj[name] = (...a) => { push(tag, a); return f(...a); };
       obj['__hooked_' + name] = true;
     };
-    for (const n of ['slash', 'ring', 'text', 'bolt', 'thrust']) wrap(g.fx, n, 'fx.' + n);
+    for (const n of ['slash', 'ring', 'text', 'bolt', 'thrust', 'spirit']) wrap(g.fx, n, 'fx.' + n);
     wrap(g.particles, 'burst', 'pb'); wrap(g.decals, 'add', 'dc');
     wrap(g, 'banner', 'bn'); wrap(g, 'shake', 'sh'); wrap(g, 'flashScreen', 'fs');
     if (!sfx.__hooked) {
@@ -116,7 +118,7 @@ export class OnlineHost {
     }
   }
 
-  levelLoaded(n, seed) { this.hook(); net.send('level', { n, seed }); }
+  levelLoaded(n, seed, info) { this.hook(); net.send('level', { n, seed, info }); }
   sendState() { net.send('state', { st: this.g.state }); }
   sendCards(cards) { net.send('cards', { cards }); }
   sendSac(cards) { net.send('sac', { cards }); }
@@ -133,9 +135,10 @@ export class OnlineHost {
       p0: encPlayer(g.players[0]),
       me: remote ? {
         hp: round(remote.hp, 10), en: round(remote.energy, 10), dead: remote.dead ? 1 : 0, stats: remote.stats, el: remote.weapons.map((w) => w.elements),
-        tal: remote.talents.map((t) => [t.key, t.level, t.power, t.cdMul, t.minMul || 1]),
+        tal: remote.talents.map((t) => [t.key, t.level, t.rarity || 0, t.cdMul, t.minMul || 1]),
         sac: remote.sac, mh: remote.maxHpMul, rl: remote.returnLevel || 0, ru: remote.rushT > 0 ? [round(remote.rushT), round(remote.rushMul)] : 0,
-        dn: remote.downed ? [round(remote.downT), round(remote.reviveP)] : 0, rg: round(remote.rageT),
+        ar: remote.weapons.map((w) => w.arts || {}),
+        dn: remote.downed ? [round(remote.downT), round(remote.reviveP)] : 0, rg: round(remote.rageT), gs: remote.guard ? round(remote.guard.store) : -1,
       } : null,
       al: g.allies.map((a) => [a.id, round(a.x), round(a.y), round(a.faceX), round(a.faceY), round(a.anim), round(a.t), a.owner.index]),
       wp: round(g.warpT),
@@ -145,6 +148,7 @@ export class OnlineHost {
       pr: g.projectiles.filter((q) => !q.dead).map(encProj),
       hz: g.hazards.map(encHazard),
       gate: [g.world.gate.active ? 1 : 0, round(g.world.gate.glow)],
+      lib: (g.world.library || g.world.shrine) ? ((g.world.library || g.world.shrine).taken ? 2 : (g.world.library || g.world.shrine).ready ? 1 : 0) : 0,
       doors: g.world.props.filter((p) => p.kind === 'house' || p.kind === 'hdoor').map((h) => round(h.doorT || 0)),
       boss: g.bossRef ? g.bossRef.id : 0,
       intro: g.intro ? round(g.intro.t) : -1,
@@ -158,12 +162,13 @@ export class OnlineHost {
 export class OnlineClient {
   constructor(g) {
     this.g = g; this.inT = 0; this.lastSnap = null;
-    net.off('snap'); net.off('level'); net.off('cards'); net.off('sac'); net.off('state'); net.off('phurt'); net.off('pchill'); net.off('pstun'); net.off('disconnect');
+    net.off('snap'); net.off('level'); net.off('cards'); net.off('sac'); net.off('route'); net.off('state'); net.off('phurt'); net.off('pchill'); net.off('pstun'); net.off('disconnect');
     net.on('snap', (m) => this.applySnap(m.s, m.ev));
-    net.on('level', (m) => g.loadLevel(m.n, m.seed));
+    net.on('level', (m) => g.loadLevel(m.n, m.seed, m.info || null));
     net.on('cards', (m) => g.openClientCards(m.cards));
     net.on('sac', (m) => g.openClientSac(m.cards));
-    net.on('cut', () => g.onRemoteCutscene());
+    net.on('route', (m) => g.onRemoteRoute(m));
+    net.on('cut', (m) => g.onRemoteCutscene(m));
     net.on('dlg', (m) => g.onRemoteDialogue(m));
     net.on('dlgend', (m) => g.onRemoteDialogueEnd(m));
     net.on('phurt', (m) => g.localPlayer().remoteHurt(m));
@@ -186,7 +191,8 @@ export class OnlineClient {
     net.send('in', {
       x: round(p.x), y: round(p.y), z: round(p.z), ax: round(p.aimX), ay: round(p.aimY), mv: round(p.moveAmt), wk: round(p.walk), as: p.activeSlot,
       an: a ? [a.kind, round(a.t), a.side || 0, round(a.dur)] : null,
-      da: d.t > 0 ? [d.type, round(d.t), round(d.dur), round(d.dx), round(d.dy)] : null, ifr: round(p.iframes), ch: round(p.chillT),
+      da: d.t > 0 ? [d.type, round(d.t), round(d.dur), round(d.dx), round(d.dy), round(d.ax ?? d.dx), round(d.ay ?? d.dy)] : null, ifr: round(p.iframes), ch: round(p.chillT),
+      gd: p.guard ? [round(p.guard.t), round(p.guard.dur)] : 0,
     });
   }
 
@@ -223,17 +229,20 @@ export class OnlineClient {
       if (!s.me.dead && me.dead) me.dead = false;
       Object.assign(me.stats, s.me.stats);
       s.me.el.forEach((el, i) => Object.assign(me.weapons[i].elements, el));
+      if (s.me.ar) s.me.ar.forEach((a, i) => { if (me.weapons[i]) me.weapons[i].arts = a; });
       // talents: the host owns them; keep our local cooldown timers
-      me.talents = (s.me.tal || []).map(([key, level, power, cdMul, minMul], i) => {
+      me.talents = (s.me.tal || []).map(([key, level, rarity, cdMul, minMul], i) => {
         const old = me.talents[i] && me.talents[i].key === key ? me.talents[i] : null;
-        return { key, level, power, cdMul, minMul, cd: old ? old.cd : 0, cdMax: old ? old.cdMax : 1 };
+        return { key, level, rarity, cdMul, minMul, cd: old ? old.cd : 0, cdMax: old ? old.cdMax : 1 };
       });
       applyDowned(me, s.me);
       me.sac = s.me.sac || []; me.maxHpMul = s.me.mh || 1; me.returnLevel = s.me.rl || 0;
+      if (me.guard && s.me.gs >= 0) me.guard.store = s.me.gs; // the host's store is the real one
     }
+    { const A = g.world.library || g.world.shrine; if (A && s.lib !== undefined) { A.ready = s.lib === 1; A.taken = s.lib === 2; } }
     // the wandering monk (drawn only)
     if (s.mk) {
-      if (!g.monk) g.monk = new Monk(g, null);
+      if (!g.monk) { g.monk = new Monk(g, null); if (g.world.kind === 'temple' && g.levelInfo && g.levelInfo.monk != null) g.monk.bi = g.levelInfo.monk; }
       const m = g.monk, a = s.mk;
       m.x = a[0]; m.y = a[1]; m.faceX = a[2]; m.faceY = a[3]; m.alpha = a[4]; m.moveAmt = a[5]; m.walk = a[6]; m.bow = a[7]; m.state = 'puppet';
     } else g.monk = null;
@@ -288,6 +297,7 @@ export class OnlineClient {
       switch (tag) {
         case 'fx.slash': g.fx.slash(...a); break;
         case 'fx.ring': g.fx.ring(...a); break;
+        case 'fx.spirit': g.fx.spirit(...a); break;
         case 'fx.text': g.fx.text(...a); break;
         case 'fx.bolt': g.fx.bolt(...a); break;
         case 'fx.thrust': g.fx.thrust(...a); break;
