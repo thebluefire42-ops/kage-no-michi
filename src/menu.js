@@ -124,22 +124,23 @@ export class Menu {
   // ---------------------------------------------------------------- online setup
   startHost() {
     this.mode = 'host'; this.t = 0; this.play = 'host';
-    net.off('connected'); net.off('status');
-    net.on('status', () => { if (net.status === 'waiting' && net.key) this.showBox(inviteLink(net.key), true, '', 0.62); });
-    net.on('connected', () => { sfx.select(); this.enterSelect('host'); });
+    net.off('status');
+    net.on('status', () => { if (net.status === 'waiting' && net.key && this.g.state === 'title') this.showBox(inviteLink(net.key), true, '', 0.62); });
     this.listenHost();
     net.host();
   }
   // the host's weapon-select messages (also set up again when a finished run brings the pair back here)
   listenHost() {
-    net.off('picks'); net.off('disconnect');
+    net.off('picks'); net.off('disconnect'); net.off('connected');
+    net.on('connected', () => { sfx.select(); this.enterSelect('host'); });
     net.on('picks', (m) => { this.picks[1] = m.picks.filter((k) => WEAPONS[k]).slice(0, 2); });
     net.on('disconnect', () => { if (this.mode === 'select') { this.notice = 'Your friend left.'; this.joined[1] = false; this.picks[1] = []; this.mode = 'host'; } });
   }
   listenClient() {
-    net.off('picks'); net.off('start'); net.off('disconnect');
+    net.off('picks'); net.off('start'); net.off('disconnect'); net.off('rejoin');
     net.on('picks', (m) => { this.picks[0] = m.picks.filter((k) => WEAPONS[k]).slice(0, 2); });
     net.on('start', (m) => { this.hideBox(); this.g.startRun(m.sets, 'client'); });
+    net.on('rejoin', (m) => { this.hideBox(); this.g.rejoinRun(m); }); // the host is mid-run: straight back in
     net.on('disconnect', () => { this.notice = 'The host left the game.'; this.reset(); });
   }
   // after an online run: straight back to the weapon select with the same partner

@@ -91,10 +91,11 @@ export class OnlineHost {
     net.on('dlgnext', () => g.onRemoteNext());
     net.off('lobby'); net.on('lobby', () => g.toLobby(false)); // the joiner left the end screen: go back together
     net.off('pause'); net.on('pause', (m) => { if (!m.on || g.state === 'play') g.setPaused(!!m.on, true); }); // the joiner paused / resumed
+    net.off('connected'); net.on('connected', () => this.rejoin()); // someone joins with our key mid-run: Player 2 is back
     net.on('disconnect', () => {
       const p = this.remote();
-      if (p) { p.dead = true; p.disconnected = true; }
-      g.banner({ title: 'Player 2 disconnected', sub: 'You continue alone', dur: 3, y: 0.25, size: 26, color: 'rgba(60,4,10,0.8)' });
+      if (p) { p.dcAlive = !p.dead; p.dead = true; p.disconnected = true; }
+      g.banner({ title: 'Player 2 disconnected', sub: net.key ? `They can rejoin with key ${net.key}` : 'You continue alone', dur: 4, y: 0.25, size: 26, color: 'rgba(60,4,10,0.8)' });
       if (g.pendingPicks) { g.pendingPicks.delete(1); g.checkPicksDone(); }
       if (g.sacPending) { g.sacPending.delete(1); g.checkSacDone(); }
     });
@@ -118,6 +119,22 @@ export class OnlineHost {
       sfx.__hooked = true;
       for (const n of Object.keys(sfx)) { if (typeof sfx[n] !== 'function') continue; const f = sfx[n]; sfx[n] = (...a) => { push('sfx', [n, ...a]); return f(...a); }; }
     }
+  }
+
+  // Player 2 came back (same key, after a refresh or a dropped connection): they get their own ninja back as it was
+  rejoin() {
+    const g = this.g, p = this.remote();
+    if (!p || !g.inRun) return;
+    p.disconnected = false;
+    if (p.dcAlive) { p.dead = false; p.iframes = 2; } // they were alive when they left
+    p.dcAlive = false;
+    net.send('rejoin', {
+      sets: g.players.map((q) => q.weapons.map((w) => w.key)), level: g.level, seed: g.levelSeed, info: g.levelInfo,
+      route: g.route, runStart: g.runStart, picked: p.picked || [], rs: g.runStats,
+    });
+    if (g.state === 'route' && g.routeScreen.active && g.routeScreen.onSel) g.routeScreen.onSel(); // (the map, if we're on it)
+    g.banner({ title: 'Player 2 rejoined', dur: 2.4, y: 0.25, size: 26 });
+    sfx.select();
   }
 
   levelLoaded(n, seed, info) { this.hook(); net.send('level', { n, seed, info }); }

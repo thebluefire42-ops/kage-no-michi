@@ -39,7 +39,12 @@ async function boot() {
       if (input.pad.connected && input.mode === 'pad') initAudio();
       game.frame(dt);
       if (first) { first = false; const ld = document.getElementById('loading'); if (ld) ld.remove(); }
-    } catch (e) { if (errors++ < 5) reportError(e); }
+    } catch (e) {
+      if (errors++ < 5) reportError(e);
+      // a draw that throws half way leaves its clip / transform on the canvas, and every later frame would be
+      // drawn through it (e.g. the map's narrow unrolling strip): wipe the drawing state so the next frame is whole
+      try { const cx = canvas.getContext('2d'); if (cx.reset) cx.reset(); else canvas.width = canvas.width; } catch (e2) { /* ignore */ }
+    }
   };
   requestAnimationFrame(loop);
 }

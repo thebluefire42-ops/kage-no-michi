@@ -465,11 +465,12 @@ export class RouteScreen {
   nodePos(c, i) {
     const L = this.L, R = this.route, n = R.cols.length;
     const step = (L.pw - L.pad * 2) / (n - 1);
-    const nodes = R.cols[c].nodes;
+    const nodes = (R.cols[c] && R.cols[c].nodes) || [];
+    if (!nodes[i]) i = clamp(i | 0, 0, Math.max(0, nodes.length - 1)); // (an index from another map: snap to a real node)
     const jx = c === 0 || c === n - 1 ? 0 : (hash(R.seed % 997, c, i) - 0.5) * step * 0.35;
     const jy = (hash(R.seed % 991, c, i + 7) - 0.5) * (nodes.length > 1 ? 0.14 : 0.3);
     const x = L.px + L.pad + c * step + jx;
-    const y = L.py + L.ph * clamp(nodes[i].y + jy, 0.24, 0.78);
+    const y = L.py + L.ph * clamp((nodes[i] ? nodes[i].y : 0.5) + jy, 0.24, 0.78);
     return [x, y];
   }
   // a crooked trail between two nodes: a curve with a couple of seeded bends
@@ -485,7 +486,7 @@ export class RouteScreen {
     return pts;
   }
   // path index the team took in column c (null if this run started later in the area)
-  taken(c) { const p = this.route.path[c]; return p === undefined || p === null ? null : p; }
+  taken(c) { const p = this.route.path[c], col = this.route.cols[c]; return p === undefined || p === null || !col || !col.nodes[p] ? null : p; }
 
   draw(ctx) {
     if (!this.active || !this.route) return;

@@ -205,7 +205,7 @@ export class Game {
     this.enemies = []; this.projectiles = []; this.hazards = []; this.banners = []; this.timers = [];
     this.world = new World(1, Math.floor(Math.random() * 3), Math.floor(Math.random() * 1e9));
     this.world.buildGround(this.groundScale());
-    this.titleT = 0; this.cam.zoom = 1;
+    this.titleT = 0; this.cam.zoom = 1; this.routeNext = 0; this.routeScreen.active = false;
     this.inRun = false; this.preview = null;
     this.bossRef = null; this.intro = null;
   }
@@ -220,6 +220,19 @@ export class Game {
     for (const t of RUN_MESSAGES) net.off(t); // the run's handlers go; the menu sets up its own
     this.toTitle(true);
     this.menu.reenterOnline(play);
+  }
+
+  // online joiner coming back into a run (after a refresh or a dropped connection): the host still has our
+  // ninja (weapons, cards, imbuements, talents, sacrifices); it sends the run and the current level, and its
+  // snapshots fill in our stats from then on
+  rejoinRun(m) {
+    this.startRun(m.sets, 'client');
+    this.runStart = m.runStart || 1;
+    if (m.route) this.route = m.route;
+    if (m.rs) this.runStats = m.rs;
+    const me = this.localPlayer(); if (me) me.picked = m.picked || [];
+    this.loadLevel(m.level, m.seed, m.info || null);
+    this.banner({ title: 'Back in the run', sub: `Level ${m.level}`, dur: 2.4, y: 0.25, size: 26 });
   }
 
   // weaponSets: [[w1, w2]] for solo, [[w1, w2], [w3, w4]] for co-op
@@ -237,6 +250,7 @@ export class Game {
       this.online = new OnlineClient(this);
     }
     this.runStats = { kills: 0, time: 0, damage: 0, upgrades: 0 };
+    this.routeNext = 0; this.routeScreen.active = false;
     this.state = 'play';
     this.monkVisited = new Set(); this.monkActive = false; // per run (a new run meets every monk again)
     this.area2Chill = false; this.skipAreaIntro = 0;
@@ -263,6 +277,7 @@ export class Game {
       if (A) w.arts = { ...(w.arts || {}), [A.slot]: key };
     }
     this.runStats = { kills: 0, time: 0, damage: 0, upgrades: 0 };
+    this.routeNext = 0; this.routeScreen.active = false;
     this.state = 'play'; this.monkVisited = new Set(); this.monkActive = false; this.area2Chill = false;
     this.training = true; this.trainingStats = { log: [], total: 0 };
     this.runStart = 0; this.route = null; this.skipAreaIntro = 2; // (no story lines, no best-level record)
@@ -291,7 +306,7 @@ export class Game {
 
   // info: the route node of this level (sent by the host online; otherwise read from the route)
   loadLevel(n, seed = Math.floor(Math.random() * 1e9), info = null) {
-    this.level = n;
+    this.level = n; this.levelSeed = seed; // (the seed lets a rejoining partner build the same level)
     const bi = biomeOf(n);
     if (this.role === 'client') { this.state = 'play'; this.cards.active = false; this.cutscene = null; this.dialogue = null; }
     const node = info || (BOSSES[n] ? null : nodeOf(this.route, n));
@@ -780,7 +795,7 @@ export class Game {
       this.state = 'route'; this.fade = 0; this.fadeDir = 0; this.cards.active = false;
       S.open(m.r, m.next, { readonly: true, sel: m.sel, onChoose: () => {} });
     }
-    S.sel = m.sel;
+    S.sel = clamp(m.sel | 0, 0, S.options.length - 1);
     if (m.ch >= 0 && S.chosen < 0) { S.chosen = m.ch; S.goT = 0; }
   }
 
