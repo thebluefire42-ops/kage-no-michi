@@ -1340,7 +1340,7 @@ export class Game {
     // camera: follow the players (with aim lead in solo), zoom out a bit when co-op partners split up
     let [tx, ty] = this.playersCenter();
     if (P.length === 1) { // solo: the camera leads a little toward the aim, easing over ~0.5 s so turning around is smooth
-      const p = P[0], lx = (p.aimX - p.aimY) * 32 * 1.1, ly = (p.aimX + p.aimY) * 16 * 1.1, k = 1 - Math.exp(-2.2 * dt);
+      const p = P[0], lx = (p.aimX - p.aimY) * 32 * 1.1, ly = (p.aimX + p.aimY) * 16 * 1.1, k = 1 - Math.exp(-1.6 * dt);
       if (!this.camLead) this.camLead = { x: lx, y: ly };
       this.camLead.x = lerp(this.camLead.x, lx, k); this.camLead.y = lerp(this.camLead.y, ly, k);
       tx += this.camLead.x; ty += this.camLead.y;

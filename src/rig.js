@@ -831,31 +831,6 @@ function drawWings(ctx, t, sx, sy, flap) {
 }
 
 // ---------------- Humanoid ----------------
-// Turning around: when a character switches between facing left and right, it doesn't mirror flat — it turns
-// through facing the camera (angle +PI/2, toward the viewer) over ~0.25 s, the body narrowing a little as it
-// goes, so the turn reads as a rotation. Small aim changes on the same side still follow instantly. A little
-// hysteresis stops aiming straight up or down from flickering. obj keeps the state.
-// Returns { facing (the angle to draw), flip (x scale, -1..1) }.
-const TURN_SPEED = 12; // radians per second through the front
-export function smoothTurn(obj, facing, now) {
-  const dt = clamp(now - (obj.turnAt ?? now), 0, 0.1); obj.turnAt = now;
-  const c = Math.cos(facing), wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
-  if (obj.turnA === undefined) obj.turnA = facing;
-  const cur = obj.turnA, cc = Math.cos(cur);
-  const want = c > 0.12 ? 1 : c < -0.12 ? -1 : (cc >= 0 ? 1 : -1), side = cc >= 0 ? 1 : -1;
-  if (!obj.turning && want === side) obj.turnA = facing; // same side: aim follows at once
-  else {
-    obj.turning = true;
-    // unwrap so the rotation passes through +PI/2 (the front)
-    let a = cur, t = facing;
-    if (want < 0) { a = wrap(a); if (a < -Math.PI / 2) a += 2 * Math.PI; t = wrap(t); while (t < a) t += 2 * Math.PI; obj.turnA = Math.min(t, a + TURN_SPEED * dt); }
-    else { a = wrap(a); if (a < 0) a += 2 * Math.PI; if (a < Math.PI / 2) a += 2 * Math.PI; t = wrap(t); while (t > a) t -= 2 * Math.PI; obj.turnA = Math.max(t, a - TURN_SPEED * dt); }
-    if (Math.abs(wrap(obj.turnA - facing)) < 0.02) { obj.turnA = facing; obj.turning = false; }
-  }
-  const f = Math.cos(obj.turnA);
-  return { facing: obj.turnA, flip: Math.sign(f || 1) * (0.55 + 0.45 * Math.abs(f)) };
-}
-
 export function drawHumanoid(ctx, o) {
   const t = o.time || 0;
   const pal = o.flash > 0 ? FLASH : o.pal;
@@ -871,7 +846,7 @@ export function drawHumanoid(ctx, o) {
   ctx.save();
   ctx.translate(o.x, o.y - (o.z || 0));
   if (o.alpha !== undefined) ctx.globalAlpha *= o.alpha;
-  ctx.scale((o.flip ?? dir) * s * (o.sqx || 1), s * (o.sqy || 1)); // o.flip: an eased mirror (see smoothFlip)
+  ctx.scale(dir * s * (o.sqx || 1), s * (o.sqy || 1));
   if (o.rot) { ctx.translate(0, -15); ctx.rotate(o.rot); ctx.translate(0, 15); }
   if (P.drop) ctx.translate(0, P.drop);
 

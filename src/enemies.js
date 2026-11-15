@@ -1,7 +1,7 @@
 // Enemies, bosses, enemy/player projectiles and area hazards.
 import { TAU, clamp, lerp, rand, pick, ease, isoX, isoY, worldDirToScreenAngle, angDiff, dist } from './util.js';
 import { ENEMIES, BOSSES, levelScale, levelDamageScale, COOP_ENEMY_HP, COOP_ENEMY_DMG, SHIELD, ENEMY_SPEED_MUL, HEAVY_HP_MUL, DIFFICULTY, AREA_WINDUP } from './config.js';
-import { drawHumanoid, drawShadow, drawProjectile, drawShieldItem, smoothTurn, INK } from './rig.js';
+import { drawHumanoid, drawShadow, drawProjectile, drawShieldItem, INK } from './rig.js';
 import { sfx } from './audio.js';
 import { BEHAVIORS, LOOKS } from './behaviors.js';
 import { EXTRA } from './extras.js';
@@ -278,7 +278,6 @@ export class Enemy {
     Object.assign(o, { x: sx, y: sy, z: this.z * 32, facing, time: t + this.seed, walk: this.walk, move: this.dead ? 0 : this.moveAmt, flash: this.flash, alpha: alpha * (o.alphaMul || 1), rot, sqx, sqy, seed: this.seed, e: this });
     if (!o.pose) o.pose = this.pose;
     if (iv && iv.pose) o.pose = iv.pose;
-    if (!o.draw && !this.dead && this.state !== 'intro') { const R = smoothTurn(this, facing, this.g.realTime); o.facing = R.facing; o.flip = R.flip; }
     if (iv && iv.flap) o.flapSpeed = iv.flap;
     if (this.stun > 0 && !this.boss && !o.pose) o.pose = { kind: 'hurt', t: 0.3 };
     // shield: held on the facing side; behind the body when walking away from the camera
