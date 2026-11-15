@@ -25,6 +25,7 @@ import { input } from './input.js';
 import { sfx } from './audio.js';
 import { net } from './net.js';
 import { ARTS } from './arts.js';
+const WIND_HEAVY = 1.4; // the heavy sword's Wind bonus (see Player.windOf)
 import { updateFinisher, finisherLook } from './finishers.js';
 
 const PALS = [
@@ -115,7 +116,7 @@ export class Player {
   get dodgeChance() { let d = 0; for (const w of this.weapons) for (const k of Object.values(w.arts || {})) d += (ARTS[w.key][k] && ARTS[w.key][k].dodge) || 0; return Math.min(0.2, d); } // capped at 20%
   // Berserker: more damage the lower your health (+0% full, up to +max at `at` health)
   artDmgMul(w) { const B = this.art(w, 'berserker'); return B ? 1 + B.max * clamp((1 - this.hp / this.maxHp) / (1 - B.at), 0, 1) : 1; }
-  chargeTimeOf(w) { const A = this.art(w, 'quickCharge') || this.art(w, 'deepCharge'); return w.def.basic.chargeTime * (A ? A.chargeMul : 1); }
+  chargeTimeOf(w) { const A = this.art(w, 'quickCharge') || this.art(w, 'deepCharge'); return w.def.basic.chargeTime * (A ? A.chargeMul : 1) * (w.key === 'heavy' ? 1 - this.windOf(w) : 1); }
   // Endless Tempo: a kill with that weapon refunds ki and cuts its cooldowns
   onKill(e, src) {
     const w = src.weapon, A = w && this.art(w, 'endlessTempo');
@@ -154,10 +155,9 @@ export class Player {
   }
   get maxEnergy() { return PLAYER_BASE.maxEnergy; }
   // every attack cooldown of weapon w is multiplied by this (Wind on that weapon, cooldown sacrifices)
-  cdMulFor(w) {
-    const wind = Math.min(ELEMENTS.wind.cap, (w && w.elements.wind ? w.elements.wind : 0) * (this.elemMul || 1));
-    return (this.stats.cooldownMul || 1) * (this.stats.cooldown || 1) * (1 - wind);
-  }
+  cdMulFor(w) { return (this.stats.cooldownMul || 1) * (this.stats.cooldown || 1) * (1 - this.windOf(w)); }
+  // Wind on weapon w (0..cap). The heavy sword's swing is so slow that it gets 1.4x as much out of each Wind card.
+  windOf(w) { return Math.min(ELEMENTS.wind.cap, (w && w.elements.wind ? w.elements.wind : 0) * (this.elemMul || 1) * (w && w.key === 'heavy' ? WIND_HEAVY : 1)); }
   get dashCooldown() { return Math.max(PLAYER_BASE.dash.minCooldown, PLAYER_BASE.dash.cooldown * (this.stats.cooldown || 1)); }
 
   after(delay, fn) { this.timers.push({ t: delay, fn }); }
@@ -731,11 +731,11 @@ export class Player {
         break;
       }
       case 'heavy': {
-        const ch = clamp(opt.ch || 0, 0, 1), charged = ch > 0.15;
+        const ch = clamp(opt.ch || 0, 0, 1), charged = ch > 0.15, quick = 1 - this.windOf(w); // Wind: the whole swing is quicker
         // a tap winds up from the shoulder; a charged blade is already raised, so the blow falls at once
-        this.anim = { kind: 'heavyCleave', t: charged ? 0.4 : 0, dur: charged ? 0.42 : 0.62 };
-        this.slowT = 0.5;
-        const delay = charged ? 0.08 : 0.27, dustCol = g.world.bi === 2 ? '#eef3fb' : '#c8b088';
+        this.anim = { kind: 'heavyCleave', t: charged ? 0.4 : 0, dur: (charged ? 0.42 : 0.62) * quick };
+        this.slowT = 0.5 * quick;
+        const delay = (charged ? 0.08 : 0.27) * quick, dustCol = g.world.bi === 2 ? '#eef3fb' : '#c8b088';
         if (!charged) g.particles.burst('dust', this.x, this.y, 0.05, 4, 1, 0.4, 3, dustCol, { under: true }); // feet set for the wind-up
         this.after(delay * 0.55, () => sfx.heavyWhoosh(ch));
         this.after(delay, () => {

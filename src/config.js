@@ -220,14 +220,14 @@ export const SUMO = { speed: 10, dur: 0.6, width: 1.8, chargeMul: 0.9, stompR: 2
 export const levelScale = (level) => (level <= 10 ? 1 + 0.05 * (level - 1) : 1.45 + 0.06 * (level - 10));
 // Enemy damage grows much slower than HP: player max HP is 70 (only sacrifices change it).
 // ...plus a step per area (areas 1-4), so every new area also hits a bit harder
-export const AREA_DMG = [0.8, 1.05, 1.15, 1.25];
+export const AREA_DMG = [0.8, 0.95, 1.15, 1.25];
 // Attack windups (the telegraphed charge before a strike) last this much longer per area (areas 1-4):
 // area 1 enemies charge slower so their attacks are easier to read. Bosses are not affected.
 export const AREA_WINDUP = [1.35, 1, 1, 1];
 export const levelDamageScale = (level) => (1 + 0.03 * (level - 1)) * AREA_DMG[level > 30 ? 3 : Math.floor((level - 1) / 10)];
 // Enemy count multiplier: area 1 ramps from 1x (level 1) to 2x (level 9);
 // later areas stay at 1.5x so there's no sudden drop when the area changes.
-export const enemyCountMul = (level) => (level <= 10 ? 1.2 + 0.8 * (Math.min(level, 6) - 1) / 5 : level <= 20 ? 1.4 : level > 30 ? 1.8 : 1.65);
+export const enemyCountMul = (level) => (level <= 10 ? 1.2 + 0.8 * (Math.min(level, 6) - 1) / 5 : level <= 20 ? 1.05 + 0.27 * Math.min(level - 11, 3) / 3 : level > 30 ? 1.8 : 1.65);
 export const levelBudget = (level) => (6 + 2.3 * level) * enemyCountMul(level);
 
 // ---- Upgrades ----

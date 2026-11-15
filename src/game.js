@@ -83,7 +83,7 @@ class Spawner {
     for (let i = list.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [list[i], list[j]] = [list[j], list[i]]; }
     // later areas: many smaller waves that trickle in, instead of a third of the level at once
     const P = SPAWN_PACING[biome];
-    const nW = level < 3 ? Math.min(2, P.waves) : P.waves;
+    const nW = level < 3 ? Math.min(2, P.waves) : level >= 11 && level <= 13 ? P.waves + 1 : P.waves;
     this.stagger = P.stagger; this.waveTimeout = P.timeout;
     for (let w = 0; w < nW; w++) this.waves.push(list.filter((_, i) => i % nW === w));
   }
