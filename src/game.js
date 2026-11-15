@@ -33,6 +33,7 @@ export const FINAL_LEVEL = 33;
 export const biomeOf = (n) => (n > 30 ? 3 : Math.floor((n - 1) / 10));
 
 const INTRO_DUR = 4.8;
+const HITSTOP_GAP = 0.35; // (see Game.hitstop)
 // low health tension: eases off after this many seconds without a hit, down to this share of itself
 const LOW_CALM_AFTER = 4, LOW_CALM_FADE = 3, LOW_CALM_MIN = 0.3;
 // route reward -> the level's arena (other rewards use the area's ordinary map)
@@ -579,7 +580,7 @@ export class Game {
     this.state = 'play';
     this.world.gate.active = true;
     sfx.gate();
-    if (this.world.kind === 'temple') this.banner({ title: 'The pact is sealed', sub: 'Walk back down to the torii to leave', dur: 2.4, y: 0.25, size: 26 });
+    if (this.world.kind === 'temple') this.banner({ title: 'The pact is sealed', sub: 'The torii beyond the temple is open', dur: 2.4, y: 0.25, size: 26 });
     else this.banner({ title: 'The torii gate opens', sub: 'Walk through it to continue', dur: 2.2, y: 0.25, size: 26 });
   }
 
@@ -911,7 +912,14 @@ export class Game {
   // shake/flashScreen are mirrored to an online partner; local* versions are for this screen only
   shake(a) { this.localShake(a); }
   localShake(a) { this.shakeAmt = Math.max(this.shakeAmt, a); }
-  hitstop(s) { this.hitstopT = Math.max(this.hitstopT, s); }
+  // hit-stop: big moments (boss kills, slams: 0.1 s and up) keep their full pause; ordinary hits pause half as long,
+  // and while you chain hits (several enemies, quick strikes) only one in every HITSTOP_GAP seconds pauses at all
+  hitstop(s) {
+    if (s >= 0.1) { this.hitstopT = Math.max(this.hitstopT, s); return; }
+    const now = this.realTime;
+    if (now - (this.lastHitstop ?? -9) < HITSTOP_GAP) return;
+    this.lastHitstop = now; this.hitstopT = Math.max(this.hitstopT, s * 0.5);
+  }
   slow(dur, scale) { this.slowT = dur; this.slowScale = scale; }
   // slows enemies, their projectiles and hazards, but not the players (bo special)
   timeWarp(dur, scale) { this.warpT = Math.max(this.warpT, dur); this.warpScale = scale; }
@@ -1331,7 +1339,12 @@ export class Game {
     const P = this.players;
     // camera: follow the players (with aim lead in solo), zoom out a bit when co-op partners split up
     let [tx, ty] = this.playersCenter();
-    if (P.length === 1) { const p = P[0]; tx += (p.aimX - p.aimY) * 32 * 1.1; ty += (p.aimX + p.aimY) * 16 * 1.1; }
+    if (P.length === 1) { // solo: the camera leads a little toward the aim, easing over ~0.5 s so turning around is smooth
+      const p = P[0], lx = (p.aimX - p.aimY) * 32 * 1.1, ly = (p.aimX + p.aimY) * 16 * 1.1, k = 1 - Math.exp(-2.2 * dt);
+      if (!this.camLead) this.camLead = { x: lx, y: ly };
+      this.camLead.x = lerp(this.camLead.x, lx, k); this.camLead.y = lerp(this.camLead.y, ly, k);
+      tx += this.camLead.x; ty += this.camLead.y;
+    }
     // tense: the camera leans in a little; low health: up to 14% closer
     let zoom = (1 + 0.04 * ease.inOutSine(this.tenseVis || 0)) * (1 + 0.24 * ease.inOutSine(this.lowVis || 0));
     if (P.length > 1 && !P[0].dead && !P[1].dead) {

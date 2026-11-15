@@ -1,11 +1,13 @@
 // Enemies, bosses, enemy/player projectiles and area hazards.
 import { TAU, clamp, lerp, rand, pick, ease, isoX, isoY, worldDirToScreenAngle, angDiff, dist } from './util.js';
 import { ENEMIES, BOSSES, levelScale, levelDamageScale, COOP_ENEMY_HP, COOP_ENEMY_DMG, SHIELD, ENEMY_SPEED_MUL, HEAVY_HP_MUL, DIFFICULTY, AREA_WINDUP } from './config.js';
-import { drawHumanoid, drawShadow, drawProjectile, drawShieldItem, smoothFlip, INK } from './rig.js';
+import { drawHumanoid, drawShadow, drawProjectile, drawShieldItem, smoothTurn, INK } from './rig.js';
 import { sfx } from './audio.js';
 import { BEHAVIORS, LOOKS } from './behaviors.js';
 import { EXTRA } from './extras.js';
 
+// enemy magic (orbs, souls) turns toward you for this many seconds after it is cast, then flies straight
+const HOMING_FOR = 0.55;
 // ---------------------------------------------------------------- Enemy
 let NEXT_ID = 1;
 export class Enemy {
@@ -276,7 +278,7 @@ export class Enemy {
     Object.assign(o, { x: sx, y: sy, z: this.z * 32, facing, time: t + this.seed, walk: this.walk, move: this.dead ? 0 : this.moveAmt, flash: this.flash, alpha: alpha * (o.alphaMul || 1), rot, sqx, sqy, seed: this.seed, e: this });
     if (!o.pose) o.pose = this.pose;
     if (iv && iv.pose) o.pose = iv.pose;
-    if (!o.draw && !this.dead) o.flip = smoothFlip(this, facing, this.g.realTime);
+    if (!o.draw && !this.dead && this.state !== 'intro') { const R = smoothTurn(this, facing, this.g.realTime); o.facing = R.facing; o.flip = R.flip; }
     if (iv && iv.flap) o.flapSpeed = iv.flap;
     if (this.stun > 0 && !this.boss && !o.pose) o.pose = { kind: 'hurt', t: 0.3 };
     // shield: held on the facing side; behind the body when walking away from the camera
@@ -516,7 +518,8 @@ export function updateProjectiles(g, dt) {
       }
       continue;
     }
-    if (q.homing) {
+    q.age = (q.age || 0) + dt;
+    if (q.homing && q.age < (q.homingFor ?? HOMING_FOR)) { // seeks for a short while only, then flies straight
       const p = nearestPlayer(g, q.x, q.y);
       const a = Math.atan2(q.vy, q.vx), want = Math.atan2(p.y - q.y, p.x - q.x);
       const na = a + clamp(angDiff(a, want), -q.homing * dt, q.homing * dt);

@@ -560,7 +560,6 @@ export class RouteScreen {
       }
     };
     if (area === 0) { // Haruno: rice paddies, cherry trees, farmhouses, a pond with a red bridge
-      place(6, 70 * u, (x, y) => paddy(ctx, x - 48 * u, y - 20 * u, 96 * u, 40 * u, u));
       place(2, 80 * u, (x, y) => pond(ctx, x, y, 46 * u, 22 * u, false, true, u));
       place(18, 40 * u, (x, y) => blossomTree(ctx, x, y, 15 * u, ['rgba(244,170,190,0.85)', 'rgba(250,200,214,0.85)', 'rgba(236,140,168,0.85)']));
       place(8, 46 * u, (x, y) => house(ctx, x, y, 16 * u, 'rgba(150,110,60,0.85)', false));
@@ -759,7 +758,9 @@ export class RouteScreen {
       sx += 20 * u;
       txt(ctx, lab, sx, sy, 12 * u, 'rgba(248,240,222,0.7)', 700, FONT_SANS, 'left');
       font(12); sx += ctx.measureText(lab).width;
-      txt(ctx, val, sx, sy, 12 * u, kind === 'diff' ? '#ff9a8a' : '#f0c860', 800, FONT_SANS, 'left');
+      // danger Low/Medium/High = green/orange/red; rewards the other way round (High is the good one)
+      const good = kind === 'diff' ? 2 - LMH.indexOf(val) : LMH.indexOf(val);
+      txt(ctx, val, sx, sy, 12 * u, ['#c0392b', '#e8902a', '#3fa040'][good], 800, FONT_SANS, 'left');
       font(12, 800); sx += ctx.measureText(val).width + 14 * u;
     }
     ctx.restore();

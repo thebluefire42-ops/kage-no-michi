@@ -98,8 +98,8 @@ export class World {
       const x0 = N / 2 - 3 + r.range(-2.5, 2.5), y0 = N / 2 - 2.5 + r.range(-3, 0.5), x1 = x0 + 6, y1 = y0 + 5, mx = (x0 + x1) / 2;
       this.temple = { x0, y0, x1, y1, door: null };
       this.spawn = { x: N - 4.8, y: N - 4.8 };
-      this.gate = { x: N - 2.4, y: N - 2.4, active: false, glow: 0 };
-      this.path = this.makePath(this.spawn, { x: mx, y: y1 + 1.6 });
+      this.gate = { x: r.range(3, 4.5), y: r.range(3, 4.5), active: false, glow: 0 }; // the way on: past the temple, at the top
+      this.path = [...this.makePath(this.spawn, { x: mx, y: y1 + 1.6 }), ...this.makePath({ x: x0 - 1.6, y: y0 - 1.6 }, this.gate)];
     } else if (this.kind === 'shrine') {
       // an imbuement shrine somewhere near the middle; after the fight you kneel before it to imbue a weapon
       const cx = N / 2 + r.range(-2.5, 2.5), cy = N / 2 + r.range(-2.5, 2.5), x0 = cx - 1.2, y0 = cy - 1.2, x1 = cx + 1.2, y1 = cy + 1.2;

@@ -654,7 +654,7 @@ export class Menu {
       const on = C.ad < 0.5;
       const ws = 1;
       ctx.save(); ctx.translate(C.cx, C.cy); ctx.scale(C.s, C.s);
-      ctx.globalAlpha *= C.a;
+      if (!C.layer) ctx.globalAlpha *= C.a; // (background cards are drawn solid so nearer ones hide what is behind them)
       // (the soft focus comes from the blurred layer)
       ctx.shadowColor = on ? 'rgba(255,200,100,0.85)' : 'rgba(0,0,0,0.5)'; ctx.shadowBlur = on ? 46 : 12;
       ctx.fillStyle = '#eee3cc'; ctx.fillRect(x, y, w, h);
@@ -747,7 +747,7 @@ export class Menu {
         const lbl = at === 0 ? 'L' : 'R';
         text(ctx, coop ? `P${pi + 1} · ${lbl}` : (at === 0 ? (pad1 ? 'LB / LT' : 'Q / E') : (pad1 ? 'RB / RT' : 'L / R mouse')), bx + bw / 2, y + h - 2 * u, 12 * u, '#fff', 800);
       });
-      if (!on) { ctx.fillStyle = `rgba(8,6,12,${Math.min(0.32, C.ad * 0.14)})`; ctx.fillRect(x - 10, y - 10, w + 20, h + 20); } // and darker
+      if (!on) { ctx.fillStyle = `rgba(8,6,12,${C.layer ? Math.min(0.62, 0.16 + C.ad * 0.16) : Math.min(0.32, C.ad * 0.14)})`; ctx.fillRect(x - 10, y - 10, w + 20, h + 20); } // and darker further back
       ctx.restore();
     };
     const v2 = this.g.view;
@@ -755,8 +755,8 @@ export class Menu {
     const lay = this.bgLayer; if (lay.width !== Math.ceil(v2.W) || lay.height !== Math.ceil(v2.H)) { lay.width = Math.ceil(v2.W); lay.height = Math.ceil(v2.H); }
     const lc = lay.getContext('2d'); lc.setTransform(1, 0, 0, 1, 0, 0); lc.clearRect(0, 0, lay.width, lay.height); lc.setTransform(ctx.getTransform());
     let layered = false;
-    for (const C of car) if (C.ad > 0.3 && C.a > 0.01) { drawCard(lc, C); layered = true; }
-    if (layered) { ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.filter = 'blur(1.2px)'; ctx.drawImage(lay, 0, 0); ctx.restore(); }
+    for (const C of car) if (C.ad > 0.3 && C.a > 0.01) { drawCard(lc, { ...C, layer: true }); layered = true; }
+    if (layered) { ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha *= 0.9; ctx.filter = 'blur(1.2px)'; ctx.drawImage(lay, 0, 0); ctx.restore(); }
     for (const C of car) if (C.ad <= 0.3 && C.a > 0.01) drawCard(ctx, C);
     // scroll arrows beside the middle card, and the weapons picked so far
     {

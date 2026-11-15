@@ -20,7 +20,7 @@ const DASH_CHOICES = { // [move, weight]
 import { TAU, clamp, lerp, rand, pick, ease, isoX, isoY, screenDirToWorld, worldDirToScreenAngle, angDiff } from './util.js';
 import { PLAYER_BASE, WEAPONS, TALENTS, ELEMENTS, weaponMove, ENEMY_DAMAGE_MUL, WEAPON_SWITCH, DAMAGE_SPREAD } from './config.js';
 import { talentCd, talentTarget, activateTalent } from './talents.js';
-import { drawHumanoid, drawShadow, smoothFlip } from './rig.js';
+import { drawHumanoid, drawShadow, smoothTurn } from './rig.js';
 import { input } from './input.js';
 import { sfx } from './audio.js';
 import { net } from './net.js';
@@ -1205,7 +1205,7 @@ export class Player {
     if (!this.dead && this.iframes > 0 && d.t <= 0 && !this.leap && this.hurtT <= 0 && this.flash <= 0) alpha *= 0.65 + 0.35 * Math.sin(t * 40);
     const o = this.rigOpts(t);
     o.alpha = alpha;
-    if (!this.dead && !this.finisher && !(this.dash.t > 0 && this.dash.type !== 'shadow')) o.flip = smoothFlip(this, o.facing, this.g.realTime); // (spins and flips keep their own turns)
+    if (!this.dead && !this.finisher && !this.spin && !(this.dash.t > 0 && this.dash.type !== 'shadow')) { const R = smoothTurn(this, o.facing, this.g.realTime); o.facing = R.facing; o.flip = R.flip; } // (spins and flips keep their own turns)
     const sx0 = isoX(this.x, this.y), sy0 = isoY(this.x, this.y, this.z);
     if (this.charge && this.weapons[this.charge.slot].key === 'heavy' && this.active) { // heavy charge: a warm glow building around the body
       const k = this.chargeFrac(), full = k >= 0.999;

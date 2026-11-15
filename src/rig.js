@@ -831,17 +831,29 @@ function drawWings(ctx, t, sx, sy, flap) {
 }
 
 // ---------------- Humanoid ----------------
-// A character's left/right mirror eases over ~0.1 s instead of snapping, with a little hysteresis so
-// aiming straight up or down doesn't make it flicker. obj keeps the state; returns the x scale (-1..1).
-export function smoothFlip(obj, facing, now) {
-  const c = Math.cos(facing);
-  if (obj.flipWant === undefined) obj.flipWant = c >= 0 ? 1 : -1;
-  if (c > 0.12) obj.flipWant = 1; else if (c < -0.12) obj.flipWant = -1;
-  const dt = clamp(now - (obj.flipAt ?? now), 0, 0.1); obj.flipAt = now;
-  const v = obj.flipS ?? obj.flipWant, step = dt / 0.1;
-  obj.flipS = v < obj.flipWant ? Math.min(obj.flipWant, v + step * 2) : Math.max(obj.flipWant, v - step * 2);
-  const f = obj.flipS;
-  return Math.sign(f || 1) * Math.max(0.12, Math.abs(f));
+// Turning around: when a character switches between facing left and right, it doesn't mirror flat — it turns
+// through facing the camera (angle +PI/2, toward the viewer) over ~0.25 s, the body narrowing a little as it
+// goes, so the turn reads as a rotation. Small aim changes on the same side still follow instantly. A little
+// hysteresis stops aiming straight up or down from flickering. obj keeps the state.
+// Returns { facing (the angle to draw), flip (x scale, -1..1) }.
+const TURN_SPEED = 12; // radians per second through the front
+export function smoothTurn(obj, facing, now) {
+  const dt = clamp(now - (obj.turnAt ?? now), 0, 0.1); obj.turnAt = now;
+  const c = Math.cos(facing), wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+  if (obj.turnA === undefined) obj.turnA = facing;
+  const cur = obj.turnA, cc = Math.cos(cur);
+  const want = c > 0.12 ? 1 : c < -0.12 ? -1 : (cc >= 0 ? 1 : -1), side = cc >= 0 ? 1 : -1;
+  if (!obj.turning && want === side) obj.turnA = facing; // same side: aim follows at once
+  else {
+    obj.turning = true;
+    // unwrap so the rotation passes through +PI/2 (the front)
+    let a = cur, t = facing;
+    if (want < 0) { a = wrap(a); if (a < -Math.PI / 2) a += 2 * Math.PI; t = wrap(t); while (t < a) t += 2 * Math.PI; obj.turnA = Math.min(t, a + TURN_SPEED * dt); }
+    else { a = wrap(a); if (a < 0) a += 2 * Math.PI; if (a < Math.PI / 2) a += 2 * Math.PI; t = wrap(t); while (t > a) t -= 2 * Math.PI; obj.turnA = Math.max(t, a - TURN_SPEED * dt); }
+    if (Math.abs(wrap(obj.turnA - facing)) < 0.02) { obj.turnA = facing; obj.turning = false; }
+  }
+  const f = Math.cos(obj.turnA);
+  return { facing: obj.turnA, flip: Math.sign(f || 1) * (0.55 + 0.45 * Math.abs(f)) };
 }
 
 export function drawHumanoid(ctx, o) {
