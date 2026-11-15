@@ -209,6 +209,7 @@ export class Player {
     this.ironT = Math.max(0, (this.ironT || 0) - dt);
     if (this.pools || this.zones) this.updateZones(dt);
     if (this.anim) { this.anim.t += dt / this.anim.dur; if (this.anim.t >= 1) this.anim = null; }
+    for (let i = this.afterimages.length - 1; i >= 0; i--) { const a = this.afterimages[i]; a.life -= dt; if (a.life <= 0) this.afterimages.splice(i, 1); }
   }
   // host side: perform an attack the joiner started
   forceAttack(slot, special, ax, ay, ch, cb) {

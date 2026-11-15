@@ -285,7 +285,7 @@ export const HEAVY_HP_MUL = 0.8;
 // Weights for the reward of a route node; sacrifice chance ramps up through the area to ROUTE.sacMax,
 // and every area has at least sacMin and at most sacPerArea sacrifice nodes on its map.
 export const ROUTE = {
-  weights: { stat: 38, element: 22, talent: 14, item: 10, art: 13 },
+  weights: { stat: 38, element: 22, talent: 14, item: 6, art: 13 },
   sacMax: 0.15, sacMin: 1, sacPerArea: 2,
   options: { stat: 3, element: 2, talent: 2, item: 3, art: 2 },
 };
@@ -318,7 +318,7 @@ export const REWARD_TIERS = [
 //  heal: restores health right away (only offered when hurt)
 //  energy: restores ki right away (only offered when not full)
 //  rush: +x% damage for the first 30 seconds of the next level
-export const HEAL_CARD = { name: 'Herbal Tea', jp: '治癒', values: [10, 15, 25, 50], color: '#ff7a8a' };
+export const HEAL_CARD = { name: 'Herbal Tea', jp: '治癒', values: [20, 30, 45, 75], color: '#ff7a8a' };
 export const ITEM_CARDS = {
   heal: HEAL_CARD,
   energy: { name: 'Energy Tonic', jp: '気薬', values: [25, 40, 60, 100], color: '#4fc8dc' },
