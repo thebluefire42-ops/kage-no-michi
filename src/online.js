@@ -89,6 +89,7 @@ export class OnlineHost {
     net.on('pick', (m) => g.onRemotePick(m.index, m.replace));
     net.on('sacpick', (m) => g.onRemoteSacPick(m.key));
     net.on('dlgnext', () => g.onRemoteNext());
+    net.off('lobby'); net.on('lobby', () => g.toLobby(false)); // the joiner left the end screen: go back together
     net.on('disconnect', () => {
       const p = this.remote();
       if (p) { p.dead = true; p.disconnected = true; }
@@ -174,6 +175,7 @@ export class OnlineClient {
     net.on('phurt', (m) => g.localPlayer().remoteHurt(m));
     net.on('pchill', (m) => g.localPlayer().applyChill(m.a, m.d, true));
     net.on('pstun', (m) => g.localPlayer().applyStun(m.d, true));
+    net.off('lobby'); net.on('lobby', () => g.toLobby(false)); // the host left the end screen: go back together
     net.on('disconnect', () => {
       const ended = g.state === 'dead' || g.state === 'victory'; // the run was over anyway
       g.toTitle();

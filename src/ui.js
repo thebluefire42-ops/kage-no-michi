@@ -590,8 +590,10 @@ export class Overlay {
 
   updateEnd(dt) {
     this.t += dt;
-    if (this.t > 1.2 && (input.pressed('confirm') || input.pressed('pause') || input.mouse.clicked)) { input.eat('confirm'); input.eat('pause'); this.g.toTitle(); return; }
-    if (this.t > END_AUTO_RETURN) this.g.toTitle();
+    // online: both go back to the weapon select together (still connected); otherwise to the main menu
+    const leave = () => (this.g.online ? this.g.toLobby() : this.g.toTitle());
+    if (this.t > 1.2 && (input.pressed('confirm') || input.pressed('pause') || input.mouse.clicked)) { input.eat('confirm'); input.eat('pause'); leave(); return; }
+    if (this.t > END_AUTO_RETURN) leave();
   }
 
   drawEnd(ctx, win) {
@@ -612,8 +614,9 @@ export class Overlay {
       const [bx, by, bw, bh] = [v.W / 2 - 170 * u, v.H * 0.84 - 26 * u, 340 * u, 52 * u];
       ctx.fillStyle = `rgba(200,48,46,${0.8 + 0.2 * Math.sin(g.realTime * 4)})`; ctx.fillRect(bx, by, bw, bh);
       ctx.strokeStyle = '#f4d690'; ctx.lineWidth = 2; ctx.strokeRect(bx, by, bw, bh);
-      text(ctx, input.mode === 'pad' ? 'Ⓐ  Return to main menu' : 'Enter — Return to main menu', v.W / 2, by + bh / 2, 18 * u, '#fff8e8', 800);
-      text(ctx, `Returning automatically in ${Math.max(0, Math.ceil(END_AUTO_RETURN - t))}s`, v.W / 2, by + bh + 22 * u, 12 * u, 'rgba(248,240,222,0.6)', 700);
+      const where = g.online ? 'weapon select' : 'main menu';
+      text(ctx, input.mode === 'pad' ? `Ⓐ  Return to ${where}` : `Enter — Return to ${where}`, v.W / 2, by + bh / 2, 18 * u, '#fff8e8', 800);
+      text(ctx, `Returning ${g.online ? 'together ' : ''}automatically in ${Math.max(0, Math.ceil(END_AUTO_RETURN - t))}s`, v.W / 2, by + bh + 22 * u, 12 * u, 'rgba(248,240,222,0.6)', 700);
     }
     ctx.restore();
   }

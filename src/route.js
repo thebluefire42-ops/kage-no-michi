@@ -426,10 +426,10 @@ export class RouteScreen {
       if (this.goT > 1.05) { this.active = false; this.onChoose(this.chosen); }
       return;
     }
-    if (this.readonly || this.t < 0.8) return;
+    if (this.t < 0.8) return;
     const n = this.options.length;
-    if (input.pressed('up') || input.pressed('left')) this.setSel((this.sel + n - 1) % n);
-    if (input.pressed('down') || input.pressed('right')) this.setSel((this.sel + 1) % n);
+    if (!this.readonly && (input.pressed('up') || input.pressed('left'))) this.setSel((this.sel + n - 1) % n);
+    if (!this.readonly && (input.pressed('down') || input.pressed('right'))) this.setSel((this.sel + 1) % n);
     // mouse: hover a path's card to select it (and see its tooltip), click to travel
     const m = input.mouse, v = this.g.view;
     let hov = -1;
@@ -438,6 +438,7 @@ export class RouteScreen {
       this.options.forEach((nd, i) => { const [x, y] = this.nodePos(this.col, i); if (Math.hypot(mx - x, my - y) < h * 0.7) hov = i; });
     }
     this.hover = hov;
+    if (this.readonly) return; // online joiner: sees the tooltips (the host's pick, or a path they hover) but the host chooses
     if (hov >= 0 && m.lastMove !== this.lastMouse) { this.setSel(hov); this.lastMouse = m.lastMove; }
     if (input.pressed('confirm') || (m.clicked && hov >= 0)) {
       input.eat('confirm');
@@ -725,7 +726,7 @@ export class RouteScreen {
 
   // a small tooltip over the path under the cursor (or the selected one): what that reward is
   drawTooltip(ctx, L, t) {
-    if (this.chosen >= 0 || this.t < 0.8 || this.readonly) return;
+    if (this.chosen >= 0 || this.t < 0.8) return;
     const i = this.hover >= 0 ? this.hover : this.sel, nd = this.options[i], col = this.route.cols[this.col];
     if (!nd || BOSSES[col.level]) return;
     const u = L.u, R = REWARDS[nd.r], [x, y] = this.nodePos(this.col, i);

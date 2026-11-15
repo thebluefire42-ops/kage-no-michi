@@ -65,9 +65,11 @@ export function rarityWeights(p, base) {
 }
 
 // two different, valid sacrifices for this player
-export function rollSacrifices(p, coop) {
+// pact: true = this hand must hold Bound Souls, false = it must not (the pact is decided for both players
+// together, see rollSacrificeHands); null = no say (solo)
+function sacPool(p, coop) {
   const taken = new Set(p.sac);
-  const pool = Object.keys(SACRIFICES).filter((k) => {
+  return Object.keys(SACRIFICES).filter((k) => {
     const S = SACRIFICES[k];
     if (taken.has(k)) return false;
     if (S.coop && !coop) return false;
@@ -75,13 +77,29 @@ export function rollSacrifices(p, coop) {
     if (S.needs && !S.needs(p)) return false;
     return true;
   });
+}
+export function rollSacrifices(p, coop, pact = null) {
+  const pool = sacPool(p, coop).filter((k) => !SACRIFICES[k].pact || pact !== false);
   const out = [];
+  if (pact) { const i = pool.findIndex((k) => SACRIFICES[k].pact); if (i >= 0) out.push(pool.splice(i, 1)[0]); }
   while (out.length < 2 && pool.length) {
     const k = pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
     if (out.some((o) => (SACRIFICES[o].excl || []).includes(k))) continue;
     out.push(k);
   }
+  if (pact && out.length === 2 && Math.random() < 0.5) out.reverse(); // the pact card isn't always on the left
   return out.map((k) => ({ type: 'sacrifice', key: k, rarity: 0 }));
+}
+
+// Co-op: both players' offers at once. Bound Souls (a pact that needs both of you) is offered to both players
+// or to neither, about as often as any single sacrifice turns up in a hand.
+export function rollSacrificeHands(players) {
+  const coop = players.length > 1;
+  if (!coop) return [rollSacrifices(players[0], false)];
+  const canPact = players.every((p) => sacPool(p, true).some((k) => SACRIFICES[k].pact));
+  const n = sacPool(players[0], true).length;
+  const pact = canPact && Math.random() < Math.min(1, 2 / Math.max(1, n));
+  return players.map((p) => rollSacrifices(p, true, pact));
 }
 
 // record the choice; returns true if it is a pact that waits for the partner

@@ -18,7 +18,7 @@ import { net } from './net.js';
 import { OnlineHost, OnlineClient, smoothPuppets } from './online.js';
 import { updateAllies } from './talents.js';
 import { Nav } from './nav.js';
-import { Monk, rollSacrifices, takeSacrifice, SACRIFICES } from './sacrifice.js';
+import { Monk, rollSacrificeHands, takeSacrifice, SACRIFICES } from './sacrifice.js';
 import { Dialogue } from './dialogue.js';
 import { storyLines } from './story.js';
 import { recordPick } from './cards.js';
@@ -37,6 +37,8 @@ const HITSTOP_GAP = 0.35; // (see Game.hitstop)
 // low health tension: eases off after this many seconds without a hit, down to this share of itself
 const LOW_CALM_AFTER = 4, LOW_CALM_FADE = 3, LOW_CALM_MIN = 0.3;
 // route reward -> the level's arena (other rewards use the area's ordinary map)
+// network messages handled only during an online run (cleared when the pair goes back to the weapon select)
+const RUN_MESSAGES = ['in', 'atk', 'tal', 'pick', 'sacpick', 'dlgnext', 'snap', 'level', 'cards', 'sac', 'route', 'cut', 'dlg', 'dlgend', 'phurt', 'pchill', 'pstun', 'disconnect', 'lobby'];
 const LEVEL_KIND = { stat: 'town', sacrifice: 'temple', art: 'dojo', talent: 'library', element: 'shrine', training: 'training' };
 const KIND_BANNER = { shrine: { title: 'Imbuement Shrine', kanji: '宿' }, town: { kanji: '町' }, temple: { kanji: '寺' }, dojo: { title: 'Training Hall', kanji: '道場' }, library: { kanji: '書庫' } };
 
@@ -183,10 +185,11 @@ export class Game {
   }
 
   // ---------------------------------------------------------------- flow
-  toTitle() {
+  // keepNet: an online pair going back to the weapon select together keeps its connection
+  toTitle(keepNet = false) {
     this.state = 'title'; this.paused = false; this.hostPaused = false;
     this.training = false; this.trainingStats = null;
-    if (this.online) net.close();
+    if (this.online && !keepNet) net.close();
     this.online = null; this.role = 'solo';
     this.menu.reset();
     this.players = []; this.level = 1; input.coop = false;
@@ -196,6 +199,18 @@ export class Game {
     this.titleT = 0; this.cam.zoom = 1;
     this.inRun = false; this.preview = null;
     this.bossRef = null; this.intro = null;
+  }
+
+  // online run over (fallen or won): both players return to the weapon select, still connected, to go again.
+  // tell: let the partner know (whoever leaves the end screen first takes the other along)
+  toLobby(tell = true) {
+    if (this.state === 'title') return;
+    const play = this.role;
+    if (!this.online || !net.connected || (play !== 'host' && play !== 'client')) { this.toTitle(); return; }
+    if (tell) net.send('lobby', {});
+    for (const t of RUN_MESSAGES) net.off(t); // the run's handlers go; the menu sets up its own
+    this.toTitle(true);
+    this.menu.reenterOnline(play);
   }
 
   // weaponSets: [[w1, w2]] for solo, [[w1, w2], [w3, w4]] for co-op
@@ -639,26 +654,27 @@ export class Game {
   }
 
   offerSacrifices() {
-    const coop = this.players.length > 1;
     this.sacChoices = new Map();
     if (this.role === 'host') { // online: both choose at the same time on their own screens
       this.sacPending = new Set([0]);
-      const rp = this.players[1];
-      if (net.connected && !rp.disconnected) { this.sacPending.add(1); this.online.sendSac(rollSacrifices(rp, coop)); }
+      const rp = this.players[1], both = net.connected && !rp.disconnected;
+      const hands = rollSacrificeHands(both ? this.players : [this.players[0]]); // Bound Souls: offered to both or neither
+      if (both) { this.sacPending.add(1); this.online.sendSac(hands[1]); }
       const p = this.players[0];
       this.state = 'cards';
-      this.cards.open(rollSacrifices(p, coop), (card) => {
+      this.cards.open(hands[0], (card) => {
         this.state = 'play'; this.sacChoices.set(0, card.key); this.sacPending.delete(0);
         if (this.sacPending.size) this.banner({ title: 'Waiting for Player 2…', dur: 2, y: 0.25, size: 24 });
         this.checkSacDone();
       }, p, { mode: 'sacrifice' });
       return;
     }
+    const hands = rollSacrificeHands(this.players); // co-op: Bound Souls is offered to both players or neither
     const pickFor = (i) => {
       if (i >= this.players.length) { this.resolveSacrifices(); return; }
       const p = this.players[i];
       this.state = 'cards';
-      this.cards.open(rollSacrifices(p, coop), (card) => { this.sacChoices.set(i, card.key); pickFor(i + 1); }, p, { mode: 'sacrifice' });
+      this.cards.open(hands[i], (card) => { this.sacChoices.set(i, card.key); pickFor(i + 1); }, p, { mode: 'sacrifice' });
     };
     pickFor(0);
   }

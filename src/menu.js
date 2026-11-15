@@ -124,22 +124,36 @@ export class Menu {
   // ---------------------------------------------------------------- online setup
   startHost() {
     this.mode = 'host'; this.t = 0; this.play = 'host';
-    net.off('connected'); net.off('picks'); net.off('status');
+    net.off('connected'); net.off('status');
     net.on('status', () => { if (net.status === 'waiting' && net.key) this.showBox(inviteLink(net.key), true, '', 0.62); });
     net.on('connected', () => { sfx.select(); this.enterSelect('host'); });
+    this.listenHost();
+    net.host();
+  }
+  // the host's weapon-select messages (also set up again when a finished run brings the pair back here)
+  listenHost() {
+    net.off('picks'); net.off('disconnect');
     net.on('picks', (m) => { this.picks[1] = m.picks.filter((k) => WEAPONS[k]).slice(0, 2); });
     net.on('disconnect', () => { if (this.mode === 'select') { this.notice = 'Your friend left.'; this.joined[1] = false; this.picks[1] = []; this.mode = 'host'; } });
-    net.host();
+  }
+  listenClient() {
+    net.off('picks'); net.off('start'); net.off('disconnect');
+    net.on('picks', (m) => { this.picks[0] = m.picks.filter((k) => WEAPONS[k]).slice(0, 2); });
+    net.on('start', (m) => { this.hideBox(); this.g.startRun(m.sets, 'client'); });
+    net.on('disconnect', () => { this.notice = 'The host left the game.'; this.reset(); });
+  }
+  // after an online run: straight back to the weapon select with the same partner
+  reenterOnline(play) {
+    if (play === 'host') this.listenHost(); else this.listenClient();
+    this.enterSelect(play);
   }
 
   startJoin(prefill = '') {
     this.mode = 'join'; this.t = 0; this.play = 'client';
     this.showBox(prefill, false, 'Game key (e.g. K7MQ2X) or invite link', 0.5);
-    net.off('connected'); net.off('picks'); net.off('start'); net.off('status');
+    net.off('connected'); net.off('status');
     net.on('connected', () => { sfx.select(); this.hideBox(); this.enterSelect('client'); });
-    net.on('picks', (m) => { this.picks[0] = m.picks.filter((k) => WEAPONS[k]).slice(0, 2); });
-    net.on('start', (m) => { this.hideBox(); this.g.startRun(m.sets, 'client'); });
-    net.on('disconnect', () => { this.notice = 'The host left the game.'; this.reset(); });
+    this.listenClient();
     if (prefill) this.tryJoin(prefill);
   }
 
