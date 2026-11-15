@@ -270,7 +270,7 @@ function fx(p, name, s) {
     case 'shock': g.shake(4); g.hitstop(0.03); g.fx.ring(T.x, T.y, 1.6, 'rgba(255,255,255,0.9)', 0.3, 5); S('heavyThud'); break;
     case 'dust': g.particles.burst('dust', T.x, T.y, 0.05, 18, 4, 0.7, 6, g.world.bi === 2 ? '#eef3fb' : '#c8b088', { under: true }); break;
     case 'crack': g.fx.thrust(p.x, p.y, dx, dy, 4.5, 'rgba(70,46,30,0.85)', 10, 0.9); for (let k = 1; k < 5; k++) g.particles.burst('dust', p.x + dx * k, p.y + dy * k, 0.05, 5, 2, 0.5, 4, '#a8906a', { under: true }); break;
-    case 'glowCharge': g.particles.burst('glow', p.x, p.y, 1, 18, 1.6, 0.7, 2.4, '#ffd070'); S('heavyCharge'); break;
+    case 'glowCharge': g.particles.burst('glow', p.x, p.y, 1, 18, 1.6, 0.7, 2.4, '#ffd070'); S('heavyCharge', 0.8); break;
     case 'boltShot': g.fx.thrust(p.x, p.y, dx, dy, Math.hypot(T.x - p.x, T.y - p.y) + 3, 'rgba(255,236,170,0.95)', 6, 0.35); S('thunk'); break;
     case 'bigBolt': g.fx.thrust(p.x, p.y, dx, dy, Math.hypot(T.x - p.x, T.y - p.y) + 5, 'rgba(255,236,170,1)', 10, 0.5); g.fx.ring(T.x, T.y, 1.4, GOLD, 0.35, 5); S('twang'); S('thunk'); break;
     case 'volley': for (const off of [-0.18, 0, 0.18]) { const vx = T.x + rand(-0.3, 0.3) - p.x, vy = T.y + rand(-0.3, 0.3) - p.y, l = Math.hypot(vx, vy) || 1; g.fx.thrust(p.x, p.y, vx / l + off * -vy / l, vy / l + off * vx / l, l + 0.6, 'rgba(255,236,170,0.9)', 5, 0.35); } S('twang'); break;

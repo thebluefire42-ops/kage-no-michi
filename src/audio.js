@@ -255,6 +255,7 @@ function noise(dur, freq, q, gain, type = 'bandpass', sweepTo = null, delay = 0)
 }
 
 function tone(freq, dur, type, gain, slideTo = null, delay = 0, attack = 0.005) {
+  if (!Number.isFinite(freq) || !Number.isFinite(dur) || !Number.isFinite(gain) || (slideTo != null && !Number.isFinite(slideTo))) return; // a bad value must never throw mid-game
   const t = ctx.currentTime + delay;
   const o = ctx.createOscillator();
   o.type = type; o.frequency.setValueAtTime(freq, t);
@@ -329,7 +330,7 @@ export const sfx = {
     noise(0.35 + k * 0.2, 700, 0.6, 0.45, 'lowpass', 90);
   },
   heavyHit() { if (!ready() || !throttle('hhit', 40)) return; tone(110, 0.18, 'sine', 0.38, 52); noise(0.12, 1200, 0.7, 0.28, 'lowpass', 200); },
-  heavyCharge(k) { if (!ready() || !throttle('hcharge', 140)) return; tone(52 + k * 46, 0.2, 'sawtooth', 0.045 + k * 0.04, 58 + k * 56); noise(0.15, 300 + k * 320, 0.7, 0.07, 'bandpass', 520 + k * 520); },
+  heavyCharge(k = 0.6) { if (!Number.isFinite(k)) k = 0.6; if (!ready() || !throttle('hcharge', 140)) return; tone(52 + k * 46, 0.2, 'sawtooth', 0.045 + k * 0.04, 58 + k * 56); noise(0.15, 300 + k * 320, 0.7, 0.07, 'bandpass', 520 + k * 520); },
   heavyReady() { if (!ready()) return; tone(196, 0.55, 'triangle', 0.1, 192); tone(392, 0.4, 'sine', 0.06, 390, 0.02); noise(0.2, 3000, 2, 0.05, 'highpass', 6000); },
   // crossbow: the string creaks while it is drawn, clicks when locked, twangs on release; bolts land with a thunk
   stringDraw(k) { if (!ready() || !throttle('string', 105)) return; const f = 170 + k * 280; tone(f, 0.09, 'sawtooth', 0.032, f * 1.15); noise(0.07, 1400 + k * 1600, 3, 0.055, 'bandpass', 2000 + k * 1800); },

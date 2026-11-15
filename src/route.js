@@ -182,12 +182,13 @@ export const rewardTone = (q) => 2 - q;
 // a small round badge next to a node: kind 'diff' shows a blade, kind 'rew' a jewel
 const IND_FIXED = { diff: { fill: '#a81e1e', glyph: '#fff2e4', edge: '#3a0606' }, rew: { fill: '#d0a030', glyph: '#3a2608', edge: '#5a3c0a' } };
 function indicator(ctx, x, y, r, tone, kind, fixed = false) {
-  const C = fixed ? IND_FIXED[kind] : IND[tone];
+  const C = fixed ? { fill: '#181014', glyph: '#ffffff', edge: '#181014' } : IND[tone]; // fixed: just the white icon, no badge (fill = the tooltip's dark, for the cut-out details)
   ctx.save(); ctx.translate(x, y);
+  if (fixed) ctx.scale(1.3, 1.3);
   ctx.shadowColor = 'rgba(30,16,8,0.45)'; ctx.shadowBlur = r * 0.5; ctx.shadowOffsetY = r * 0.12;
-  ctx.fillStyle = C.fill; ctx.beginPath(); ctx.arc(0, 0, r, 0, TAU); ctx.fill();
+  if (!fixed) { ctx.fillStyle = C.fill; ctx.beginPath(); ctx.arc(0, 0, r, 0, TAU); ctx.fill(); }
   ctx.shadowColor = 'transparent';
-  ctx.strokeStyle = C.edge; ctx.lineWidth = Math.max(1, r * 0.16); ctx.stroke();
+  if (!fixed) { ctx.strokeStyle = C.edge; ctx.lineWidth = Math.max(1, r * 0.16); ctx.stroke(); }
   ctx.fillStyle = C.glyph; ctx.strokeStyle = C.glyph; ctx.lineCap = 'round';
   if (kind === 'diff') { // danger: a warning triangle with an exclamation mark
     ctx.lineJoin = 'round'; ctx.lineWidth = r * 0.12;
