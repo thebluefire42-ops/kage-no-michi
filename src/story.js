@@ -17,22 +17,22 @@ const look = (type) => () => ({ ...LOOKS[type](idle, 0), pose: null });
 
 // side: which portrait frame (left = the players' side). voice: blip pitch.
 export const CHARACTERS = {
-  kage: { name: 'Kage', jp: '影', side: 'left', voice: 1.0, rig: () => ({ pal: PLAYER_PALS[0], head: 'hood', scarf: true }) },
-  kaze: { name: 'Kaze', jp: '風', side: 'left', voice: 1.18, rig: () => ({ pal: PLAYER_PALS[1], head: 'hood', scarf: true }) },
-  gensai: { name: 'Regent Gensai', jp: '玄斎', side: 'right', voice: 0.62, rig: () => ({ pal: GENSAI_PAL, head: 'eboshi', armor: true, mantle: true }) },
-  captain: { name: 'Captain of the Guard', jp: '隊長', side: 'right', voice: 0.8, rig: () => ({ pal: KAGERO_PAL, head: 'jingasa' }) },
-  hunter: { name: 'Kagero Hunter', jp: '追手', side: 'right', voice: 0.95, rig: () => ({ pal: KAGERO_PAL, head: 'mask' }) },
-  assassin: { name: 'Shinobi Assassin', jp: '刺客', side: 'right', voice: 1.05, rig: look('assassin') },
-  ashigaru: { name: 'Ashigaru Captain', jp: '足軽', side: 'right', voice: 0.85, rig: look('spear') },
-  kurogane: { name: 'Kurogane', jp: '黒鉄', side: 'right', voice: 0.7, rig: look('ronin_boss') },
-  tengu: { name: 'Tengu', jp: '天狗', side: 'right', voice: 0.9, rig: look('tengu') },
-  shuten: { name: 'Shuten', jp: '酒呑', side: 'right', voice: 0.5, rig: look('oni_lord') },
-  bound: { name: 'Bound Warrior', jp: '亡者', side: 'right', voice: 0.75, rig: look('ghostspear') },
-  fcaptain: { name: 'Fortress Captain', jp: '城番', side: 'right', voice: 0.8, rig: look('kgsoldier') },
-  honorguard: { name: 'Honor Guard', jp: '親衛', side: 'right', voice: 0.7, rig: look('kgchampion') },
-  monk0: { name: 'Flute Monk', jp: '虚無僧', side: 'right', voice: 0.9, rig: () => ({ ...MONK_LOOK[0] }) },
-  monk1: { name: 'Old Hermit', jp: '仙人', side: 'right', voice: 1.25, rig: () => ({ ...MONK_LOOK[1] }) },
-  monk2: { name: 'Pale Monk', jp: '幽僧', side: 'right', voice: 0.78, rig: () => ({ ...MONK_LOOK[2] }) },
+  kage: { name: 'Kage', jp: '影', side: 'left', col: '#1f4fa8', voice: 1.0, rig: () => ({ pal: PLAYER_PALS[0], head: 'hood', scarf: true }) },
+  kaze: { name: 'Kaze', jp: '風', side: 'left', col: '#1f4fa8', voice: 1.18, rig: () => ({ pal: PLAYER_PALS[1], head: 'hood', scarf: true }) },
+  gensai: { name: 'Regent Gensai', jp: '玄斎', side: 'right', col: '#8a1426', voice: 0.62, rig: () => ({ pal: GENSAI_PAL, head: 'eboshi', armor: true, mantle: true }) },
+  captain: { name: 'Captain of the Guard', jp: '隊長', side: 'right', col: '#6a1a24', voice: 0.8, rig: () => ({ pal: KAGERO_PAL, head: 'jingasa' }) },
+  hunter: { name: 'Kagero Hunter', jp: '追手', side: 'right', col: '#5a1830', voice: 0.95, rig: () => ({ pal: KAGERO_PAL, head: 'mask' }) },
+  assassin: { name: 'Shinobi Assassin', jp: '刺客', side: 'right', col: '#3e2a62', voice: 1.05, rig: look('assassin') },
+  ashigaru: { name: 'Ashigaru Captain', jp: '足軽', side: 'right', col: '#6a5420', voice: 0.85, rig: look('spear') },
+  kurogane: { name: 'Kurogane', jp: '黒鉄', side: 'right', col: '#3e4452', voice: 0.7, rig: look('ronin_boss') },
+  tengu: { name: 'Tengu', jp: '天狗', side: 'right', col: '#9a2a18', voice: 0.9, rig: look('tengu') },
+  shuten: { name: 'Shuten', jp: '酒呑', side: 'right', col: '#5a1a5e', voice: 0.5, rig: look('oni_lord') },
+  bound: { name: 'Bound Warrior', jp: '亡者', side: 'right', col: '#1e5a62', voice: 0.75, rig: look('ghostspear') },
+  fcaptain: { name: 'Fortress Captain', jp: '城番', side: 'right', col: '#6a2a1a', voice: 0.8, rig: look('kgsoldier') },
+  honorguard: { name: 'Honor Guard', jp: '親衛', side: 'right', col: '#7a5a14', voice: 0.7, rig: look('kgchampion') },
+  monk0: { name: 'Flute Monk', jp: '虚無僧', side: 'right', col: '#5a4428', voice: 0.9, rig: () => ({ ...MONK_LOOK[0] }) },
+  monk1: { name: 'Old Hermit', jp: '仙人', side: 'right', col: '#2e5a34', voice: 1.25, rig: () => ({ ...MONK_LOOK[1] }) },
+  monk2: { name: 'Pale Monk', jp: '幽僧', side: 'right', col: '#4a4a6a', voice: 0.78, rig: () => ({ ...MONK_LOOK[2] }) },
 };
 
 export const SCRIPTS = {

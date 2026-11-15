@@ -35,6 +35,14 @@ export function portrait(key) {
   return c;
 }
 
+// the speaker's colour: the box's fill (dark) and its bright frame
+function hexRgb(h) { const n = parseInt(h.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
+function mix(h, to, f) { const a = hexRgb(h); return `rgb(${a.map((v, i) => Math.round(v + (to[i] - v) * f)).join(',')})`; }
+function speakerTone(C) {
+  const col = C.col || (C.side === 'right' ? '#6a1a24' : '#1f4fa8');
+  return { fill: col, edge: mix(col, [255, 255, 255], 0.55), plate: mix(col, [0, 0, 0], 0.25) };
+}
+
 function wrap(ctx, str, maxW) {
   const words = str.split(' '), lines = [];
   let cur = '';
@@ -101,6 +109,7 @@ export class Dialogue {
     const ps = Math.round(150 * u), pad = Math.round(22 * u), gap = Math.round(12 * u);
     const by = H - pad - ps, slide = (1 - this.inT) * 40 * u;
     const bx = pad + ps + gap, bw = W - 2 * (pad + ps + gap), bh = ps;
+    const tone = speakerTone(C), speakSide = C.side === 'right' ? 'right' : 'left';
     ctx.save();
     ctx.translate(0, slide); ctx.globalAlpha = this.inT;
     // portraits
@@ -109,22 +118,32 @@ export class Dialogue {
       if (!who || !CHARACTERS[who]) continue;
       const speaking = who === L.who;
       const bob = speaking && this.typing ? Math.round(Math.abs(Math.sin(this.t * 14)) * 2 * u) : 0;
-      const lift = speaking ? Math.round(-6 * u) : 0;
-      this.box(ctx, x, by + lift, ps, ps, u, speaking);
+      const lift = 0;
+      this.box(ctx, x, by + lift, ps, ps, u, speaking, speaking ? tone.fill : '#141826', speaking ? tone.edge : null);
       ctx.imageSmoothingEnabled = false;
       const inset = Math.round(6 * u);
       ctx.drawImage(portrait(who), x + inset, by + lift + inset - bob, ps - inset * 2, ps - inset * 2 + bob);
       ctx.imageSmoothingEnabled = true;
-      if (!speaking) { ctx.fillStyle = 'rgba(6,8,20,0.55)'; ctx.fillRect(x + inset, by + inset, ps - inset * 2, ps - inset * 2); }
+      if (!speaking) { ctx.fillStyle = 'rgba(6,8,20,0.68)'; ctx.fillRect(x + inset, by + inset, ps - inset * 2, ps - inset * 2); }
     }
-    // text box
-    this.box(ctx, bx, by, bw, bh, u, true);
+    // text box, in the speaker's colour
+    this.box(ctx, bx, by, bw, bh, u, true, tone.fill, tone.edge);
+    // the bridge joining the text box to the speaker's portrait (drawn over both frames so they read as one window)
+    if (speakSide === 'left' ? this.lastLeft === L.who : this.lastOther === L.who) {
+      const b = Math.max(2, Math.round(3 * u)), lo = speakSide === 'left' ? pad + ps : bx + bw, hi = speakSide === 'left' ? bx : W - pad - ps;
+      const cy = by + bh * 0.5, hh = Math.round(bh * 0.2);
+      const fg = ctx.createLinearGradient(0, by, 0, by + bh); fg.addColorStop(0, tone.fill); fg.addColorStop(1, '#05081a');
+      ctx.fillStyle = '#000'; ctx.fillRect(lo, cy - hh - 3 * b, hi - lo, 2 * hh + 6 * b);
+      ctx.fillStyle = tone.edge; ctx.fillRect(lo - b, cy - hh - 2 * b, hi - lo + 2 * b, 2 * hh + 4 * b);
+      ctx.fillStyle = '#000'; ctx.fillRect(lo - 2 * b, cy - hh - b, hi - lo + 4 * b, 2 * hh + 2 * b);
+      ctx.fillStyle = fg; ctx.fillRect(lo - 2 * b, cy - hh, hi - lo + 4 * b, 2 * hh);
+    }
     // name plate on the speaker's side
     ctx.font = `${Math.round(20 * u)}px ${FONT}`;
     const name = L.name || `${C.jp ? C.jp + ' ' : ''}${C.name}`; // a line can name its speaker (a temple monk's own name)
     const nw = ctx.measureText(name).width + 28 * u, nh = 34 * u;
     const nx = C.side === 'right' ? bx + bw - nw - 14 * u : bx + 14 * u;
-    this.box(ctx, nx, by - nh + 6 * u, nw, nh, u, true, C.side === 'right' ? '#5a1424' : '#1a2a5a');
+    this.box(ctx, nx, by - nh + 6 * u, nw, nh, u, true, tone.plate, tone.edge);
     ctx.fillStyle = '#ffe9a8'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(name, nx + nw / 2, by - nh / 2 + 7 * u);
     // text
@@ -152,10 +171,10 @@ export class Dialogue {
   }
 
   // classic double-bordered window
-  box(ctx, x, y, w, h, u, lit, fill = '#0e1638') {
+  box(ctx, x, y, w, h, u, lit, fill = '#0e1638', edge = null) {
     const b = Math.max(2, Math.round(3 * u));
     ctx.fillStyle = '#000'; ctx.fillRect(x - b, y - b, w + b * 2, h + b * 2);
-    ctx.fillStyle = lit ? '#f4f0ff' : '#8a88a0'; ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = edge || (lit ? '#f4f0ff' : '#5a5870'); ctx.fillRect(x, y, w, h);
     ctx.fillStyle = '#000'; ctx.fillRect(x + b, y + b, w - b * 2, h - b * 2);
     const g = ctx.createLinearGradient(0, y, 0, y + h);
     g.addColorStop(0, fill); g.addColorStop(1, '#05081a');

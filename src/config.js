@@ -39,7 +39,7 @@ export const WEAPONS = {
   katanas: {
     name: 'Dual Katanas', jp: '双刀', desc: 'Fast, and versatile in close quarters.',
     rating: { speed: 5, damage: 3, range: 1 },
-    basic: { name: 'Twin Slash', interval: 0.27, lock: 0.24, dmg: 5, range: 1.75, arc: 115 },
+    basic: { name: 'Twin Slash', interval: 0.34, lock: 0.24, dmg: 5, range: 1.75, arc: 115 },
     special: { name: 'Whirlwind', cost: 35, cd: 0.9, lock: 0.5, dmg: 7, ticks: 5, dur: 0.5, radius: 2.2 },
   },
   crossbow: {

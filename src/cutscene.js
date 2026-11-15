@@ -45,13 +45,13 @@ export class IntroCutscene {
 
   buildCourt() {
     const A = [];
-    A.push(this.gensai = this.actor({ id: 'gensai', x: 0.73, y: -0.07, facing: Math.PI, rig: { pal: GENSAI_PAL, head: 'eboshi', armor: true, mantle: true, fat: 1.1 }, s: 2.5 }));
-    A.push(this.actor({ id: 'g1', x: 0.63, y: 0, facing: Math.PI, rig: { pal: KAGERO_PAL, head: 'jingasa', weapon: 'spear', grip: 'pole' } }));
-    A.push(this.actor({ id: 'g2', x: 0.85, y: -0.07, facing: Math.PI, rig: { pal: KAGERO_PAL, head: 'jingasa', weapon: 'spear', grip: 'pole' } }));
+    A.push(this.gensai = this.actor({ id: 'gensai', x: 0.53, y: 0.035, facing: Math.PI, rig: { pal: GENSAI_PAL, head: 'eboshi', armor: true, mantle: true, fat: 1.1 }, s: 2.5 }));
+    A.push(this.actor({ id: 'g1', x: 0.64, y: -0.02, facing: Math.PI, rig: { pal: KAGERO_PAL, head: 'jingasa', weapon: 'spear', grip: 'pole' } }));
+    A.push(this.actor({ id: 'g2', x: 0.72, y: -0.05, facing: Math.PI, rig: { pal: KAGERO_PAL, head: 'jingasa', weapon: 'spear', grip: 'pole' } }));
     A.push(this.guardL = this.actor({ id: 'g3', x: 0.12, y: 0.02, facing: 0, rig: { pal: KAGERO_PAL, head: 'jingasa', weapon: 'spear', grip: 'pole' } }));
     A.push(this.guardR = this.actor({ id: 'g4', x: 0.2, y: 0.03, facing: 0, rig: { pal: KAGERO_PAL, head: 'jingasa', weapon: 'spear', grip: 'pole' } }));
-    A.push(this.kage = this.actor({ id: 'kage', x: 0.4, y: 0.04, facing: 0, rig: { pal: PALS[0], head: 'hood', scarf: true, ...weaponRig(this.g.players[0]) }, pose: { kind: 'kneel', t: 0 } }));
-    if (this.coop) A.push(this.kaze = this.actor({ id: 'kaze', x: 0.31, y: 0.05, facing: 0, rig: { pal: PALS[1], head: 'hood', scarf: true, ...weaponRig(this.g.players[1]) }, pose: { kind: 'kneel', t: 0 } }));
+    A.push(this.kage = this.actor({ id: 'kage', x: 0.4, y: 0.04, facing: 0, rig: { pal: PALS[0], head: 'hood', scarf: true }, pose: { kind: 'kneel', t: 0 } }));
+    if (this.coop) A.push(this.kaze = this.actor({ id: 'kaze', x: 0.31, y: 0.05, facing: 0, rig: { pal: PALS[1], head: 'hood', scarf: true }, pose: { kind: 'kneel', t: 0 } }));
     this.actors = A;
   }
 
@@ -60,8 +60,8 @@ export class IntroCutscene {
     A.push(this.captain = this.actor({ id: 'captain', x: 0.62, y: 0.02, facing: Math.PI, rig: { pal: KAGERO_PAL, head: 'kabuto', armor: true, weapon: 'naginata', grip: 'pole' }, s: 2.45 }));
     A.push(this.actor({ id: 's1', x: 0.72, y: -0.01, facing: Math.PI, rig: { pal: KAGERO_PAL, head: 'jingasa', weapon: 'spear', grip: 'pole' } }));
     A.push(this.actor({ id: 's2', x: 0.79, y: 0.03, facing: Math.PI, rig: { pal: KAGERO_PAL, head: 'jingasa', weapon: 'spear', grip: 'pole' } }));
-    A.push(this.kage = this.actor({ id: 'kage', x: 0.44, y: 0.05, facing: 0, rig: { pal: PALS[0], head: 'hood', scarf: true, ...weaponRig(this.g.players[0]) }, pose: { kind: 'kneel', t: 0.6 } }));
-    if (this.coop) A.push(this.kaze = this.actor({ id: 'kaze', x: 0.35, y: 0.06, facing: 0, rig: { pal: PALS[1], head: 'hood', scarf: true, ...weaponRig(this.g.players[1]) }, pose: { kind: 'kneel', t: 0.6 } }));
+    A.push(this.kage = this.actor({ id: 'kage', x: 0.44, y: 0.05, facing: 0, rig: { pal: PALS[0], head: 'hood', scarf: true }, pose: { kind: 'kneel', t: 0.6 } }));
+    if (this.coop) A.push(this.kaze = this.actor({ id: 'kaze', x: 0.35, y: 0.06, facing: 0, rig: { pal: PALS[1], head: 'hood', scarf: true }, pose: { kind: 'kneel', t: 0.6 } }));
     this.actors = A;
   }
 
@@ -214,7 +214,8 @@ export class IntroCutscene {
   // a background character in the game's own style: small, a little darker with distance
   extra(ctx, x, y, s, rig, o = {}) {
     drawShadow(ctx, x, y, 14 * s * 0.5, 0.25);
-    drawHumanoid(ctx, { ...rig, x, y, z: 0, facing: o.facing ?? 0, time: this.t + x * 0.01, walk: o.walk ? this.t * 9 + x : 0, move: o.walk ? 1 : 0, s, pose: o.pose || null, flash: 0, alpha: 1, seed: x });
+    const walking = typeof o.walk === 'number'; // o.walk: the stride phase, from how far the figure has walked
+    drawHumanoid(ctx, { ...rig, x, y, z: 0, facing: o.facing ?? 0, time: this.t + (o.seed ?? 0), walk: walking ? o.walk : 0, move: walking ? 1 : 0, s, pose: o.pose || null, flash: 0, alpha: o.alpha ?? 1, seed: o.seed ?? 0 });
   }
 
   drawCourtLife(ctx, W, H, k, gy) {
@@ -226,8 +227,8 @@ export class IntroCutscene {
     // the wall walk: guards patrolling with lanterns, an archer keeping watch
     const guard = { pal: KAGERO_PAL, head: 'jingasa', weapon: 'spear', grip: 'pole' };
     for (let i = 0; i < 3; i++) { // patrols on the wall walk, one carrying a lantern
-      const span = 1.3, u = ((t * 0.018 * (i % 2 ? -1 : 1) + i * 0.43) % span + span) % span - 0.15;
-      this.extra(ctx, u * W, wy - 12 * k, 0.75 * k, i === 1 ? { pal: KAGERO_PAL, head: 'jingasa', weapon: 'lantern', grip: 'down' } : guard, { walk: true, facing: i % 2 ? Math.PI : 0 });
+      const span = 1.3, d = t * 0.018 + i * 0.43, u = (((i % 2 ? -d : d) % span) + span) % span - 0.15;
+      this.extra(ctx, u * W, wy - 12 * k, 0.75 * k, i === 1 ? { pal: KAGERO_PAL, head: 'jingasa', weapon: 'lantern', grip: 'pole' } : guard, { walk: d * 170, facing: i % 2 ? Math.PI : 0, seed: i * 3 });
     }
     this.extra(ctx, W * 0.9, wy - 12 * k, 0.75 * k, { pal: KAGERO_PAL, head: 'kasa', weapon: 'bow', grip: 'down' }, { facing: Math.PI });
     // paper lanterns hung under the wall's tile cap
@@ -239,11 +240,11 @@ export class IntroCutscene {
       { pal: { skin: '#e2b48c', cloth: '#3a2a3a', cloth2: '#241824', sash: '#a8823a', hat: '#141218' }, head: 'eboshi', robe: true },
       { pal: { skin: '#e8c4a0', cloth: '#4a3a2a', cloth2: '#2a2018', sash: '#7a2a22', hair: '#141016' }, head: 'bandana', robe: true },
       { pal: { skin: '#e2b48c', cloth: '#2a2a3e', cloth2: '#1a1a28', sash: '#c8a050', hat: '#141218' }, head: 'eboshi', robe: true },
-      { pal: { skin: '#e8c4a0', cloth: '#5a4a3a', cloth2: '#3a2e22', sash: '#3a2a50', hair: '#141016' }, head: 'bandana', robe: true, weapon: 'lantern', grip: 'down' },
+      { pal: { skin: '#e8c4a0', cloth: '#5a4a3a', cloth2: '#3a2e22', sash: '#3a2a50', hair: '#141016' }, head: 'bandana', robe: true, weapon: 'lantern', grip: 'pole' },
       { pal: { skin: '#e2b48c', cloth: '#3a2a3a', cloth2: '#241824', sash: '#a8823a', hat: '#141218' }, head: 'eboshi', robe: true },
       { pal: { skin: '#e8c4a0', cloth: '#4a4a52', cloth2: '#2a2a30', sash: '#7a2a22', hair: '#141016' }, head: 'bandana', robe: true },
     ];
-    COURT.forEach((rig, i) => this.extra(ctx, W * (0.24 + i * 0.045 + hsh(i, 8) * 0.01), gy - 26 * k, (0.95 + hsh(i, 9) * 0.12) * k, rig, { facing: 0 }));
+    COURT.forEach((rig, i) => this.extra(ctx, W * (0.24 + i * 0.045 + hsh(i, 8) * 0.01), gy - 26 * k, (0.95 + hsh(i, 9) * 0.12) * k, rig, { facing: 0, seed: i * 1.7 }));
     // banners in the courtyard, wet and heavy in the rain
     nobori(ctx, W * 0.03, gy - 4 * k, k, t * 0.6, 1, { col: '#5a0e16', h: 150 });
     nobori(ctx, W * 0.535, gy - 30 * k, k, t * 0.6, 2, { col: '#5a0e16', h: 130 });
@@ -291,11 +292,15 @@ export class IntroCutscene {
       { pal: { skin: '#e6c4a0', cloth: '#3a3a48', cloth2: '#26262e', sash: '#c8a050', metal: '#ddd', wood: '#c8a868' }, head: 'komuso', robe: true, weapon: 'flute', grip: 'down' },
       { pal: { skin: '#e2b48c', cloth: '#5a6a5a', cloth2: '#3a463a', sash: '#8a3a2a', hat: '#c8a868' }, head: 'kasa' },
     ];
+    // the road narrows toward a vanishing point above the horizon; a figure's size follows its distance from it
+    const hz = gy - 10 * k, vp = hz - (H - hz) * 0.08 / 0.52, actorY = gy + 0.045 * H, persp = (y) => (y - vp) / (actorY - vp);
     for (let i = 0; i < 3; i++) {
-      const q = ((t * 0.012 + i * 0.3) % 1), d = 1 - q * 0.8, x = W * 0.5 + (i - 1) * 10 * k * d, y = gy - 10 * k + (H - gy) * 0.18 * d;
-      this.extra(ctx, x, y, 0.75 * k * d, TRAV[i], { walk: true, facing: -Math.PI / 2 });
+      // same scale rule as the exiles in front (2.3 * 0.8 at the actors' line), shrinking with distance
+      const q = (t * 0.02 + i * 0.33) % 1, y = lerp(gy - 2 * k, hz + 1 * k, q), d = persp(y);
+      const x = W * (0.522 + (i - 1) * 0.022), fadeA = clamp(q / 0.1, 0, 1) * clamp((1 - q) / 0.2, 0, 1);
+      this.extra(ctx, x, y, 1.75 * k * d, TRAV[i], { walk: t * 3 + i * 2, facing: -Math.PI / 2, alpha: fadeA, seed: i });
     }
-    { const q = (t * 0.008) % 1, d = 1 - q * 0.6, x = W * 0.535, y = gy - 10 * k + (H - gy) * 0.24 * d;
+    { const q = (t * 0.012) % 1, y = lerp(gy - 3 * k, hz + 1 * k, q), d = persp(y) * 1.6, x = W * 0.565;
       ctx.fillStyle = `rgba(40,32,30,${0.6 + 0.3 * d})`; ctx.fillRect(x - 12 * k * d, y - 14 * k * d, 24 * k * d, 9 * k * d); // the cart
       ctx.beginPath(); ctx.arc(x - 6 * k * d, y - 4 * k * d, 4.5 * k * d, 0, TAU); ctx.arc(x + 6 * k * d, y - 4 * k * d, 4.5 * k * d, 0, TAU); ctx.fill();
       ctx.beginPath(); ctx.ellipse(x - 22 * k * d, y - 8 * k * d, 9 * k * d, 5 * k * d, 0, 0, TAU); ctx.fill(); } // the ox

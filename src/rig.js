@@ -902,8 +902,16 @@ export function drawHumanoid(ctx, o) {
     const bx = onBack ? 3 + lx * 0.8 : 0;
     if (bw === 'saya_long') drawWeapon(ctx, bw, bx - 1 + lx * 0.7, shY + 1, onBack ? 1.9 : 2.3, pal);   // across the back, hilt over the shoulder
     else if (bw === 'saya') { drawWeapon(ctx, bw, -1, hipY - 1, 2.75, pal); drawWeapon(ctx, bw, 0.5, hipY + 1, 2.9, pal); } // at the hip
-    else if (bw === 'shield_back') drawWeapon(ctx, bw, onBack ? bx + 1 : -4 + lx * 0.5, shY + 9, 0, pal); // slung flat across the back
-    else if (bw === 'crossbow_back') drawWeapon(ctx, bw, onBack ? bx - 4 + lx * 0.7 : -8 + lx * 0.7, onBack ? shY + 12 : shY + 15, onBack ? -1.45 : -1.75, pal); // strapped upright on the back
+    else if (bw === 'shield_back' || bw === 'crossbow_back') {
+      // flat against the back: seen from the side it is edge-on (a thin sliver behind the spine), so it never
+      // pokes out in front of the body; from the front it hides behind the torso, from behind it shows whole
+      const side = onBack ? 0 : Math.abs(fx);
+      ctx.save();
+      if (bw === 'shield_back') { ctx.translate(onBack ? bx + 1 : -6.5 * side + lx * 0.5, shY + 8); ctx.scale(1 - 0.72 * side, 0.82); drawWeapon(ctx, bw, 0, 0, 0, pal); }
+      else { ctx.translate(onBack ? bx - 4 + lx * 0.7 : -6 * side + lx * 0.5, onBack ? shY + 12 : shY + 17); ctx.scale(1 - 0.7 * side, 1); drawWeapon(ctx, bw, 0, 0, onBack ? -1.45 : -1.62, pal); }
+      ctx.restore();
+    }
+    else if (bw === 'holystaff') drawWeapon(ctx, bw, -2 + lx * 0.6, hipY + 8, -1.95, pal); // head up behind the shoulder, not by the feet
     else drawWeapon(ctx, bw, -6 + lx * 0.6, shY + 10, 2.3, pal);
   };
   if (o.backWeapon && !back) drawStowed(false);
