@@ -204,6 +204,11 @@ export const GENSAI_GUARD = ['kgsoldier', 'kgsoldier', 'kgspear', 'kgsentry', 'k
 // Heavy (big tanky) enemies are rarer: lower pick weight and a per-level cap.
 export const HEAVY_WEIGHT = 0.55;
 export const heavyCap = (level, coop) => 1 + Math.floor((((level - 1) % 10) + 1) / 4) + (coop ? 1 : 0);
+// shield-bearers (pavise, iron, bark, ice...): at most this many per level, the same growth as heavies
+export const shieldCapFor = (level, coop) => 1 + Math.floor((((level - 1) % 10) + 1) / 4) + (coop ? 1 : 0);
+export const SHIELD_WEIGHT = 0.8;     // how often shield-bearers are picked compared with plain enemies
+export const SPAWN_REPEAT = 0.55;     // each heavy / shield-bearer already in the level multiplies the next one's odds by this
+export const SPAWN_GUARANTEE = { shield: 3, heavy: 5 }; // from this level of each area, every level has at least one
 // Shields block 80% of frontal hits until broken by 3 blocked melee hits or a burst of damage.
 export const SHIELD = { block: 0.8, arc: Math.PI * 2 / 3, meleeHits: 3, burstFrac: 0.35, burstWindow: 1.5, breakStun: 0.8 };
 export const PLAYER_STUN = 0.45;
@@ -290,8 +295,8 @@ export const ROUTE = {
 // harder-hitting and more heavies on Difficult. count = enemy budget, heavyW = heavy pick weight,
 // heavyCap = change to the per-level heavy cap, dmg = enemy damage.
 export const DIFFICULTY = [
-  { key: 'novice',    name: 'Novice',    count: 0.88, heavyW: 0.45, heavyCap: -1, dmg: 0.82 },
-  { key: 'regular',   name: 'Regular',   count: 1.0,  heavyW: 1.0,  heavyCap: 0,  dmg: 1.0 },
+  { key: 'novice',    name: 'Easy',      count: 0.88, heavyW: 0.45, heavyCap: -1, dmg: 0.82 },
+  { key: 'regular',   name: 'Normal',    count: 1.0,  heavyW: 1.0,  heavyCap: 0,  dmg: 1.0 },
   { key: 'difficult', name: 'Difficult', count: 1.3,  heavyW: 1.7,  heavyCap: 1,  dmg: 1.2 },
 ];
 export const DIFFICULTY_ODDS = [0.3, 0.45, 0.25];

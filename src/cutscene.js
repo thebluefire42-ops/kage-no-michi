@@ -209,8 +209,8 @@ export class IntroCutscene {
     for (const bx of [W * 0.58, W * 0.95]) this.brazier(ctx, bx, gy - 30 * k, k);
   }
 
-  // the courtyard at night: bats round the keep, patrols with lanterns on the wall walk, lanterns and
-  // banners, silent courtiers watching from the shadows by the wall, crows on the gate roof, a cat
+  // the courtyard at night: bats round the keep, lanterns and
+  // banners, crows on the gate roof, a cat
   // a background character in the game's own style: small, a little darker with distance
   extra(ctx, x, y, s, rig, o = {}) {
     drawShadow(ctx, x, y, 14 * s * 0.5, 0.25);
@@ -224,27 +224,12 @@ export class IntroCutscene {
       const a = t * (0.5 + hsh(i, 2) * 0.4) + i * 0.9, r = (70 + hsh(i, 3) * 90) * k;
       bat(ctx, W * 0.62 + Math.cos(a) * r * 1.6, gy - 270 * k + Math.sin(a) * r * 0.45, (1.1 + hsh(i, 4)) * k, t + i);
     }
-    // the wall walk: guards patrolling with lanterns, an archer keeping watch
-    const guard = { pal: KAGERO_PAL, head: 'jingasa', weapon: 'spear', grip: 'pole' };
-    for (let i = 0; i < 3; i++) { // patrols on the wall walk, one carrying a lantern
-      const span = 1.3, d = t * 0.018 + i * 0.43, u = (((i % 2 ? -d : d) % span) + span) % span - 0.15;
-      this.extra(ctx, u * W, wy - 12 * k, 0.75 * k, i === 1 ? { pal: KAGERO_PAL, head: 'jingasa', weapon: 'lantern', grip: 'pole' } : guard, { walk: d * 170, facing: i % 2 ? Math.PI : 0, seed: i * 3 });
-    }
-    this.extra(ctx, W * 0.9, wy - 12 * k, 0.75 * k, { pal: KAGERO_PAL, head: 'kasa', weapon: 'bow', grip: 'down' }, { facing: Math.PI });
+    // (no patrols on the wall walk or onlookers by the wall: just the regent, his spearmen and the exiles)
+
     // paper lanterns hung under the wall's tile cap
     for (let i = 0; i < 6; i++) { const x = W * (0.06 + i * 0.17); if (Math.abs(x - W * 0.5) < 110 * k) continue; hangingLantern(ctx, x, wy + 2 * k, k, t, i * 1.7, { col: '#a8261c', label: '影' }); }
     // crows on the gate roof
     for (const [dx, sc] of [[-60, 1.3], [-40, 1.1], [52, 1.25]]) crow(ctx, W * 0.5 + dx * k, wy - 22 * k, sc * k, t + dx);
-    // courtiers and servants watching from the dark by the wall, one with a lantern
-    const COURT = [ // retainers and servants watching by the wall
-      { pal: { skin: '#e2b48c', cloth: '#3a2a3a', cloth2: '#241824', sash: '#a8823a', hat: '#141218' }, head: 'eboshi', robe: true },
-      { pal: { skin: '#e8c4a0', cloth: '#4a3a2a', cloth2: '#2a2018', sash: '#7a2a22', hair: '#141016' }, head: 'bandana', robe: true },
-      { pal: { skin: '#e2b48c', cloth: '#2a2a3e', cloth2: '#1a1a28', sash: '#c8a050', hat: '#141218' }, head: 'eboshi', robe: true },
-      { pal: { skin: '#e8c4a0', cloth: '#5a4a3a', cloth2: '#3a2e22', sash: '#3a2a50', hair: '#141016' }, head: 'bandana', robe: true, weapon: 'lantern', grip: 'pole' },
-      { pal: { skin: '#e2b48c', cloth: '#3a2a3a', cloth2: '#241824', sash: '#a8823a', hat: '#141218' }, head: 'eboshi', robe: true },
-      { pal: { skin: '#e8c4a0', cloth: '#4a4a52', cloth2: '#2a2a30', sash: '#7a2a22', hair: '#141016' }, head: 'bandana', robe: true },
-    ];
-    COURT.forEach((rig, i) => this.extra(ctx, W * (0.24 + i * 0.045 + hsh(i, 8) * 0.01), gy - 26 * k, (0.95 + hsh(i, 9) * 0.12) * k, rig, { facing: 0, seed: i * 1.7 }));
     // banners in the courtyard, wet and heavy in the rain
     nobori(ctx, W * 0.03, gy - 4 * k, k, t * 0.6, 1, { col: '#5a0e16', h: 150 });
     nobori(ctx, W * 0.535, gy - 30 * k, k, t * 0.6, 2, { col: '#5a0e16', h: 130 });

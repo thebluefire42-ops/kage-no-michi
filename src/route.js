@@ -736,8 +736,8 @@ export class RouteScreen {
     if (nd.name) lines.push({ text: nd.name, size: 12.5, col: '#f0c870', font: FONT_SERIF, weight: 800 });
     lines.push({ text: tip, size: 12, col: 'rgba(248,240,222,0.85)' });
     const stats = [];
-    const LMH = ['Low', 'Medium', 'High'];
-    if (nd.d !== undefined) stats.push(['', LMH[nd.d], diffTone(nd.d), 'diff']);
+    const LMH = ['Low', 'Medium', 'High'], DANGER = DIFFICULTY.map((x) => x.name); // Easy / Normal / Difficult
+    if (nd.d !== undefined) stats.push(['', DANGER[nd.d], diffTone(nd.d), 'diff']);
     if (nd.q !== undefined) stats.push(['', LMH[nd.q], rewardTone(nd.q), 'rew']);
     const font = (size, weight = 700, f = FONT_SANS) => { ctx.font = `${weight} ${Math.round(size * u)}px ${f}`; };
     let w = 90 * u;
@@ -759,9 +759,10 @@ export class RouteScreen {
       sx += 20 * u;
       txt(ctx, lab, sx, sy, 12 * u, 'rgba(248,240,222,0.7)', 700, FONT_SANS, 'left');
       font(12); sx += ctx.measureText(lab).width;
-      // danger Low/Medium/High = green/orange/red; rewards the other way round (High is the good one)
-      const good = kind === 'diff' ? 2 - LMH.indexOf(val) : LMH.indexOf(val);
-      txt(ctx, val, sx, sy, 12 * u, ['#c0392b', '#e8902a', '#3fa040'][good], 800, FONT_SANS, 'left');
+      // danger Easy/Normal/Difficult = green/orange/red; rewards the other way round (High is the good one)
+      const good = kind === 'diff' ? 2 - DANGER.indexOf(val) : LMH.indexOf(val);
+      txt(ctx, val, sx + 1 * u, sy + 1 * u, 12 * u, 'rgba(0,0,0,0.75)', 800, FONT_SANS, 'left'); // a dark drop so the colour stands off the paper
+      txt(ctx, val, sx, sy, 12 * u, ['#ff3b2e', '#ffa22e', '#3ee05a'][good], 800, FONT_SANS, 'left');
       font(12, 800); sx += ctx.measureText(val).width + 14 * u;
     }
     ctx.restore();

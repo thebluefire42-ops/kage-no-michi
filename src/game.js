@@ -1,6 +1,6 @@
 // Game orchestration: states, level flow, spawning, combat glue, camera and rendering.
 import { TAU, clamp, lerp, rand, pick, ease, isoX, isoY, screenToWorld, dist, angDiff } from './util.js';
-import { ADMIN_DAMAGE, ENEMIES, BOSSES, BIOME_POOLS, levelBudget, PLAYER_BASE, COOP_BOSS_HP, COOP_ENEMY_COUNT, ELEMENTS, ELEMENT_RULES, HEAVY_WEIGHT, heavyCap, SHIELD, DROPS, MUSIC_TENSE, SPAWN_PACING, chainDamageFor, DIFFICULTY, DOJO_POOL, LIBRARY_POOL, LIBRARY_WISE_WEIGHT } from './config.js';
+import { ADMIN_DAMAGE, ENEMIES, BOSSES, BIOME_POOLS, levelBudget, PLAYER_BASE, COOP_BOSS_HP, COOP_ENEMY_COUNT, ELEMENTS, ELEMENT_RULES, HEAVY_WEIGHT, heavyCap, shieldCapFor, SHIELD_WEIGHT, SPAWN_REPEAT, SPAWN_GUARANTEE, SHIELD, DROPS, MUSIC_TENSE, SPAWN_PACING, chainDamageFor, DIFFICULTY, DOJO_POOL, LIBRARY_POOL, LIBRARY_WISE_WEIGHT } from './config.js';
 import { World } from './world.js';
 import { Player } from './player.js';
 import { Enemy, updateProjectiles, updateHazards, drawHazards, drawProjectiles, drawProjectileShadows } from './enemies.js';
@@ -52,18 +52,31 @@ class Spawner {
     else if (kind === 'library') pool = [...pool, ...LIBRARY_POOL];
     let budget = levelBudget(level) * (g.players.length > 1 ? COOP_ENEMY_COUNT : 1) * D.count;
     const list = [];
-    const cap = Math.max(0, heavyCap(level, g.players.length > 1) + D.heavyCap);
-    let heavies = 0;
-    while (budget > 0.5) {
-      const affordable = pool.filter((t) => ENEMIES[t].cost <= budget && (!ENEMIES[t].heavy || heavies < cap));
-      if (!affordable.length) break;
-      // newer types are a bit rarer, cheap fodder more common, big tanks rare
-      const weights = affordable.map((t) => (t === 'bandit' || t === 'karateka' ? 1.6 : 1) * (level - ENEMIES[t].minLevel < 3 ? 0.6 : 1) * (ENEMIES[t].heavy ? HEAVY_WEIGHT * D.heavyW : 1) * (LIBRARY_POOL.includes(t) && kind === 'library' ? LIBRARY_WISE_WEIGHT : 1));
+    // heavies and shield-bearers each have their own cap that grows through the area, every one already picked
+    // makes the next of its kind less likely, and once the area is under way each level gets at least one of
+    // each, so they come steadily instead of none for several levels and then a crowd
+    const coop = g.players.length > 1, local = ((level - 1) % 10) + 1;
+    const cap = Math.max(0, heavyCap(level, coop) + D.heavyCap);
+    const shieldCap = Math.max(0, shieldCapFor(level, coop) + D.heavyCap);
+    const cat = (t) => ENEMIES[t].heavy ? 'heavy' : ENEMIES[t].shield ? 'shield' : 'normal';
+    const n = { heavy: 0, shield: 0, normal: 0 }, capOf = { heavy: cap, shield: shieldCap, normal: Infinity };
+    const pickFrom = (types) => {
+      const weights = types.map((t) => (t === 'bandit' || t === 'karateka' ? 1.6 : 1) * (level - ENEMIES[t].minLevel < 3 ? 0.6 : 1) * (ENEMIES[t].heavy ? HEAVY_WEIGHT * D.heavyW : 1) * (ENEMIES[t].shield ? SHIELD_WEIGHT : 1) * (cat(t) === 'normal' ? 1 : SPAWN_REPEAT ** n[cat(t)]) * (LIBRARY_POOL.includes(t) && kind === 'library' ? LIBRARY_WISE_WEIGHT : 1));
       let r = Math.random() * weights.reduce((a, b) => a + b, 0);
-      let type = affordable[0];
-      for (let i = 0; i < affordable.length; i++) { r -= weights[i]; if (r <= 0) { type = affordable[i]; break; } }
-      list.push(type); budget -= ENEMIES[type].cost;
-      if (ENEMIES[type].heavy) heavies++;
+      for (let i = 0; i < types.length; i++) { r -= weights[i]; if (r <= 0) return types[i]; }
+      return types[0];
+    };
+    while (budget > 0.5) {
+      const affordable = pool.filter((t) => ENEMIES[t].cost <= budget && n[cat(t)] < capOf[cat(t)]);
+      if (!affordable.length) break;
+      const type = pickFrom(affordable);
+      list.push(type); budget -= ENEMIES[type].cost; n[cat(type)]++;
+    }
+    // the guarantee: swap a plain enemy for a shield-bearer / a heavy when the level rolled none
+    for (const [c, from] of [['shield', SPAWN_GUARANTEE.shield], ['heavy', SPAWN_GUARANTEE.heavy]]) {
+      const opts = pool.filter((t) => cat(t) === c);
+      const swap = list.findIndex((t) => cat(t) === 'normal');
+      if (kind !== 'dojo' && local >= from && n[c] === 0 && capOf[c] > 0 && opts.length && swap >= 0) { list[swap] = pickFrom(opts); n[c]++; }
     }
     for (let i = list.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [list[i], list[j]] = [list[j], list[i]]; }
     // later areas: many smaller waves that trickle in, instead of a third of the level at once

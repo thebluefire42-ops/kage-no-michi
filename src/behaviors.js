@@ -4,6 +4,9 @@ import { BOSS_DMG, PLAYER_STUN, GENSAI_GUARD, SUMO, PLAYER_BASE } from './config
 import { sfx } from './audio.js';
 import { Enemy, slamAt } from './enemies.js';
 import { drawKappa } from './rig.js';
+// Kurogane's band: who he calls in (plain soldiers throughout, heavies only once he rages)
+const KURO_ADDS = ['bandit', 'bandit', 'spear', 'archer', 'tate'];
+const KURO_HEAVY = ['sumo', 'samurai'];
 import { drawWeasel, drawTanuki, drawBoar, drawKomainu, drawWisp, drawGasha, drawDummy } from './creatures.js';
 
 const slashA = (wx, wy) => Math.atan2(((wx + wy) * 16) / 0.55, (wx - wy) * 32);
@@ -415,7 +418,7 @@ export const BEHAVIORS = {
     onSpawn: (e, g) => { sfx.bossRoar(); g.shake(8); },
     think: (e, dt, g) => {
       const [dx, dy, d] = e.toPlayer(); e.face(dx, dy);
-      if (e.phase === 1 && e.hp < e.hpMax * 0.5) { e.phase = 2; e.speed = 3.5; sfx.bossRoar(); g.shake(10); g.bossPhase(e, 'The Warlord rages!'); }
+      if (e.phase === 1 && e.hp < e.hpMax * 0.5) { e.phase = 2; e.speed = 3.5; sfx.bossRoar(); g.shake(10); g.bossPhase(e, 'The Warlord rages!'); e.data.summonCd = Math.min(e.data.summonCd, 1.5); }
       e.data.summonCd -= dt; e.data.whirlCd -= dt;
       const p2 = e.phase === 2;
       // the great whirl: a long, slow wind-up and a huge circle of steel; get out or pay dearly
@@ -423,7 +426,8 @@ export const BEHAVIORS = {
         e.data.whirlCd = p2 ? 9 : 12;
         e.windup(p2 ? 1.15 : 1.4, { kind: 'circle', x: e.x, y: e.y, r: 5 }, 'iaiCrouch', 'whirl'); sfx.bossRoar(); return;
       }
-      if (p2 && e.data.summonCd <= 0) { e.state = 'summon'; e.t = 0.9; e.data.summonCd = 11; e.vx = e.vy = 0; return; }
+      const adds = g.enemies.filter((x) => !x.dead && !x.boss).length;
+      if (e.data.summonCd <= 0 && adds < (p2 ? 6 : 4)) { e.state = 'summon'; e.t = 0.9; e.data.summonCd = p2 ? 12 : 14; e.vx = e.vy = 0; return; }
       if (e.atkCd <= 0) {
         if (d < 2.8 && Math.random() < 0.35) { e.data.combo = p2 ? 2 : 1; startRoninDash(e); return; } // close in: sometimes he dashes through you
         if (d < 2.8) { e.windup(p2 ? 0.42 : 0.55, { kind: 'arc', range: 3.0, arc: 3.8, angle: Math.atan2(dy, dx) }, 'windup', 'sweep'); return; }
@@ -462,12 +466,16 @@ export const BEHAVIORS = {
         e.t -= dt;
         if (Math.random() < 0.5) g.particles.emit('smoke', e.x + rand(-1, 1), e.y + rand(-1, 1), 0.2, 0, 0, 0.6, 0.8, 8, 'rgba(60,40,50,1)');
         if (e.t <= 0) {
-          for (let k = 0; k < 3; k++) {
-            const a = (k / 3) * TAU + rand(-0.3, 0.3);
+          // his ronin band: soldiers of the area throughout; once he rages, a brute or armoured samurai with them
+          const heavyIn = g.enemies.filter((x) => !x.dead && !x.boss && x.cfg.heavy).length;
+          const band = [pick(KURO_ADDS), pick(KURO_ADDS)];
+          if (e.phase === 2 && heavyIn < 2) band.push(pick(KURO_HEAVY)); else if (e.phase === 2) band.push(pick(KURO_ADDS));
+          band.forEach((type, k) => {
+            const a = (k / band.length) * TAU + rand(-0.3, 0.3);
             let x = e.x + Math.cos(a) * 2, y = e.y + Math.sin(a) * 2;
             if (g.world.blocked(x, y, 0.4)) [x, y] = g.world.randomFreePoint(e.target.x, e.target.y, 3);
-            g.addEnemy(new Enemy(g, 'bandit', x, y, g.level));
-          }
+            g.addEnemy(new Enemy(g, type, x, y, g.level));
+          });
           e.state = 'recover'; e.t = 0.4; sfx.bossRoar();
         }
       }
