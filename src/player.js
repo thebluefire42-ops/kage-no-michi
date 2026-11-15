@@ -1153,7 +1153,7 @@ export class Player {
       const partnerUp = g.players.some((o) => o !== this && o.active);
       if (partnerUp) {
         this.downed = true; this.downT = PLAYER_BASE.downTime; this.reviveP = 0;
-        g.banner({ title: `Player ${this.index + 1} is down!`, sub: `Stand next to them to revive (${PLAYER_BASE.downTime}s)`, dur: 2.4, y: 0.25, size: 26, color: 'rgba(60,4,10,0.8)' });
+        g.banner({ title: `Player ${this.index + 1} is down!`, sub: `Stand next to them to revive (${Math.round(PLAYER_BASE.downTime)}s)`, dur: 2.4, y: 0.25, size: 26, color: 'rgba(60,4,10,0.8)' });
       } else { this.dead = true; this.deadT = 0; g.onPlayerDeath(this); }
     }
     return true;

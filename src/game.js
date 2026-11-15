@@ -38,7 +38,7 @@ const HITSTOP_GAP = 0.35; // (see Game.hitstop)
 const LOW_CALM_AFTER = 4, LOW_CALM_FADE = 3, LOW_CALM_MIN = 0.3;
 // route reward -> the level's arena (other rewards use the area's ordinary map)
 // network messages handled only during an online run (cleared when the pair goes back to the weapon select)
-const RUN_MESSAGES = ['in', 'atk', 'tal', 'pick', 'sacpick', 'dlgnext', 'snap', 'level', 'cards', 'sac', 'route', 'cut', 'dlg', 'dlgend', 'phurt', 'pchill', 'pstun', 'disconnect', 'lobby'];
+const RUN_MESSAGES = ['pause', 'in', 'atk', 'tal', 'pick', 'sacpick', 'dlgnext', 'snap', 'level', 'cards', 'sac', 'route', 'cut', 'dlg', 'dlgend', 'phurt', 'pchill', 'pstun', 'disconnect', 'lobby'];
 const LEVEL_KIND = { stat: 'town', sacrifice: 'temple', art: 'dojo', talent: 'library', element: 'shrine', training: 'training' };
 const KIND_BANNER = { shrine: { title: 'Imbuement Shrine', kanji: '宿' }, town: { kanji: '町' }, temple: { kanji: '寺' }, dojo: { title: 'Training Hall', kanji: '道場' }, library: { kanji: '書庫' } };
 
@@ -185,6 +185,15 @@ export class Game {
   }
 
   // ---------------------------------------------------------------- flow
+  // Pause. Online it is shared: either player pausing pauses the game for both, either resuming resumes both.
+  // The host's pause reaches the joiner in every snapshot (pz); the joiner tells the host with a 'pause' message.
+  setPaused(on, fromRemote = false) {
+    if (on === this.paused) return;
+    this.paused = on;
+    if (on) { this.overlay.sel = 0; this.overlay.t = 0; }
+    if (!fromRemote && this.role === 'client' && net.connected) net.send('pause', { on: on ? 1 : 0 });
+  }
+
   // keepNet: an online pair going back to the weapon select together keeps its connection
   toTitle(keepNet = false) {
     this.state = 'title'; this.paused = false; this.hostPaused = false;
@@ -1213,7 +1222,7 @@ export class Game {
           if (client) this.stepClient(dtReal); // online the world keeps going for the joiner
           break;
         }
-        if (this.state === 'play' && input.pressed('pause')) { this.paused = true; this.overlay.sel = 0; this.overlay.t = 0; input.eat('pause'); break; }
+        if (this.state === 'play' && input.pressed('pause')) { this.setPaused(true); input.eat('pause'); break; }
         if (this.state === 'cards') { this.cards.update(dtReal); if (client) this.stepClient(dtReal); else this.updateWorldAmbient(dtReal * 0.3); break; }
         if (client) { if (this.state !== 'transition') this.stepClient(dtReal); } else this.updatePlay(dtReal);
         break;

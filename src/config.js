@@ -20,8 +20,8 @@ export const PLAYER_BASE = {
   hitIframes: 0.55,
   clearHeal: 0,        // no free healing between levels (use regen, syphon or the staff)
   coopReviveHp: 35,    // a fallen co-op partner comes back with this much HP (see coopReturnAfter)
-  coopReturnAfter: 3,  // co-op: a fallen player returns this many levels after the one they fell in
-  downTime: 15,        // co-op: seconds a downed player can still be revived
+  coopReturnAfter: 1,  // co-op: a fallen player returns this many levels after the one they fell in (the next one)
+  downTime: 37.5,      // co-op: seconds a downed player can still be revived
   reviveTime: 1.8,     // seconds the partner must stand next to them
   reviveRange: 1.4,
   reviveHp: 30,
@@ -227,7 +227,7 @@ export const AREA_WINDUP = [1.35, 1, 1, 1];
 export const levelDamageScale = (level) => (1 + 0.03 * (level - 1)) * AREA_DMG[level > 30 ? 3 : Math.floor((level - 1) / 10)];
 // Enemy count multiplier: area 1 ramps from 1x (level 1) to 2x (level 9);
 // later areas stay at 1.5x so there's no sudden drop when the area changes.
-export const enemyCountMul = (level) => (level <= 10 ? 1.2 + 0.8 * (Math.min(level, 6) - 1) / 5 : level > 30 ? 1.8 : 1.65);
+export const enemyCountMul = (level) => (level <= 10 ? 1.2 + 0.8 * (Math.min(level, 6) - 1) / 5 : level <= 20 ? 1.4 : level > 30 ? 1.8 : 1.65);
 export const levelBudget = (level) => (6 + 2.3 * level) * enemyCountMul(level);
 
 // ---- Upgrades ----
@@ -265,7 +265,7 @@ export const MUSIC_TENSE = { combatWindow: 3, combatEnemies: 3, calmEnemies: 2, 
 // per area (levels 1-2 use 2 waves). Areas 3-4 trickle in over many small waves.
 export const SPAWN_PACING = [
   { waves: 3, stagger: 0.45, timeout: 13 },
-  { waves: 4, stagger: 0.5, timeout: 12 },
+  { waves: 6, stagger: 0.8, timeout: 15 },
   { waves: 5, stagger: 0.5, timeout: 12 },
   { waves: 7, stagger: 0.7, timeout: 11 },
 ];

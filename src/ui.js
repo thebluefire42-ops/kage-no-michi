@@ -514,10 +514,10 @@ export class Overlay {
     if (input.pressed('left')) { this.cardSel = Math.max(0, (this.cardSel || 0) - 1); sfx.move(); }
     if (input.pressed('right')) { this.cardSel = Math.min(Math.max(0, n - 1), (this.cardSel || 0) + 1); sfx.move(); }
     if (input.mouse.wheel) { this.cardSel = clamp((this.cardSel || 0) + Math.sign(input.mouse.wheel), 0, Math.max(0, n - 1)); input.mouse.wheel = 0; }
-    if (input.pressed('pause') || input.pressed('back')) { this.g.paused = false; input.eat('pause'); return; }
+    if (input.pressed('pause') || input.pressed('back')) { this.g.setPaused(false); input.eat('pause'); return; }
     if (input.pressed('confirm')) {
       input.eat('confirm'); input.eat('dash');
-      if (this.sel % 2 === 0) this.g.paused = false; else this.g.toTitle();
+      if (this.sel % 2 === 0) this.g.setPaused(false); else this.g.toTitle();
     }
   }
   // every card this run's players picked (co-op: both, labelled), oldest first

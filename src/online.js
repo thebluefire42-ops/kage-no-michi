@@ -90,6 +90,7 @@ export class OnlineHost {
     net.on('sacpick', (m) => g.onRemoteSacPick(m.key));
     net.on('dlgnext', () => g.onRemoteNext());
     net.off('lobby'); net.on('lobby', () => g.toLobby(false)); // the joiner left the end screen: go back together
+    net.off('pause'); net.on('pause', (m) => { if (!m.on || g.state === 'play') g.setPaused(!!m.on, true); }); // the joiner paused / resumed
     net.on('disconnect', () => {
       const p = this.remote();
       if (p) { p.dead = true; p.disconnected = true; }
@@ -205,7 +206,9 @@ export class OnlineClient {
     if (s.st === 'intro' && g.state !== 'intro') g.state = 'intro';
     else if (s.st === 'play' && (g.state === 'intro' || g.state === 'transition')) g.state = 'play';
     else if ((s.st === 'dead' || s.st === 'victory') && g.state !== s.st) { g.state = s.st; g.overlay.t = 0; }
-    g.hostPaused = !!s.pz;
+    // the host paused or resumed (for itself or because we did): follow it
+    const pz = !!s.pz;
+    if (pz !== g.hostPaused) { g.hostPaused = pz; g.setPaused(pz, true); }
     g.cleared = !!s.cl;
     if (s.rs) g.runStats = s.rs;
     // host's ninja
