@@ -660,6 +660,14 @@ export class Overlay {
     const items = this.pauseItems(); this.sel = clamp(this.sel, 0, items.length - 1);
     if (input.pressed('up')) { this.sel = (this.sel + items.length - 1) % items.length; sfx.move(); }
     if (input.pressed('down')) { this.sel = (this.sel + 1) % items.length; sfx.move(); }
+    if (this.g.players.length > 1) { // co-op: L1 / R1 switch between the players' cards
+      const to = input.pressed('L1') ? 0 : input.pressed('R1') ? 1 : -1, m = input.mouse, v = this.g.view;
+      let clickTab = -1;
+      if (m.clicked && this.tabRects) this.tabRects.forEach((r, i) => { const mx = m.x * v.dpr, my = m.y * v.dpr; if (mx > r[0] && mx < r[0] + r[2] && my > r[1] && my < r[1] + r[3]) clickTab = i; });
+      const pick = clickTab >= 0 ? clickTab : to;
+      if (pick >= 0 && pick !== (this.cardTab || 0)) { this.cardTab = pick; this.cardSel = 0; this.cardScroll = 0; sfx.move(); }
+      if (clickTab >= 0) m.clicked = false;
+    }
     const n = this.runCards().length;
     if (input.pressed('left')) { this.cardSel = Math.max(0, (this.cardSel || 0) - 1); sfx.move(); }
     if (input.pressed('right')) { this.cardSel = Math.min(Math.max(0, n - 1), (this.cardSel || 0) + 1); sfx.move(); }
@@ -673,8 +681,9 @@ export class Overlay {
   }
   // every card this run's players picked (co-op: both, labelled), oldest first
   runCards() {
-    const g = this.g, list = [];
+    const g = this.g, list = [], tab = g.players.length > 1 ? (this.cardTab || 0) : -1;
     for (const p of g.players) {
+      if (tab >= 0 && p.index !== tab) continue; // (co-op: only the chosen player's tab)
       const picked = (p.picked || []).filter((c) => !c.traded); // (cards traded in are gone)
       for (const k of p.sac || []) if (!picked.some((c) => c.type === 'sacrifice' && c.key === k)) picked.push({ type: 'sacrifice', key: k, rarity: 0 }); // (the online joiner's sacrifices)
       for (const c of picked) list.push({ card: c, player: p, label: g.players.length > 1 ? `P${p.index + 1}` : '' });
@@ -695,10 +704,22 @@ export class Overlay {
     const list = this.runCards(), n = list.length, sel = clamp(this.cardSel || 0, 0, Math.max(0, n - 1));
     this.cardScroll = lerp(this.cardScroll ?? sel, sel, 0.18);
     const ch = Math.min(v.H * 0.42, 300 * u), cw = ch * (230 / 340), gap = 14 * u, cy = v.H * 0.585;
-    text(ctx, '札  Cards this run', v.W / 2, cy - ch / 2 - (g.players.length > 1 ? 44 : 26) * u, 15 * u, '#e8c470', 800, FONT_SERIF);
+    if (g.players.length < 2) text(ctx, '札  Cards this run', v.W / 2, cy - ch / 2 - 26 * u, 15 * u, '#e8c470', 800, FONT_SERIF); // (co-op: the player tabs stand there)
+    this.tabRects = null;
+    if (g.players.length > 1) { // tabs: [L1] Player 1 | Player 2 [R1]
+      const pad = input.mode === 'pad', tw = 130 * u, th = 24 * u, ty = cy - ch / 2 - 40 * u, cur = this.cardTab || 0;
+      this.tabRects = [[v.W / 2 - tw - 4 * u, ty, tw, th], [v.W / 2 + 4 * u, ty, tw, th]];
+      this.tabRects.forEach(([x, y, w, h], i) => {
+        const on = i === cur, col = PLAYER_COLORS[i];
+        ctx.fillStyle = on ? col : 'rgba(20,14,22,0.85)'; ctx.beginPath(); ctx.roundRect(x, y, w, h, 5 * u); ctx.fill();
+        ctx.strokeStyle = col; ctx.lineWidth = 1.5 * u; ctx.stroke();
+        text(ctx, `Player ${i + 1}`, x + w / 2, y + h / 2 + 0.5, 12.5 * u, on ? '#fff' : col, 800);
+      });
+      const key = (lbl, x) => (pad ? drawPadButton(ctx, lbl, x, ty + th / 2, 18 * u, '#1e1a24', '#e8c470') : slotKey(ctx, lbl, x, ty + th / 2, u, false));
+      key(pad ? 'LB' : 'Q', v.W / 2 - tw - 24 * u); key(pad ? 'RB' : 'J', v.W / 2 + tw + 24 * u);
+    }
     if (!n) text(ctx, 'No cards chosen yet', v.W / 2, cy, 18 * u, 'rgba(248,240,222,0.7)', 800, FONT_SERIF);
-    // co-op: player 2's cards come after a gap, each player's cards sit on a band in their colour under a
-    // "Player N" heading, and every card has a frame in that colour
+    // co-op: one player's cards at a time (the tabs above), on a band in their colour, every card framed in it
     const coopC = g.players.length > 1, slot = (i) => i + (coopC && list[i].player.index === 1 ? 0.6 : 0);
     const span = n ? slot(n - 1) : 0, fits = (span + 1) * (cw + gap) <= v.W * 0.9; // all fit: the whole row centred; else the chosen card in the middle
     const xOf = (i) => v.W / 2 + (slot(i) - (fits ? span / 2 : slot(Math.round(this.cardScroll)) + (this.cardScroll - Math.round(this.cardScroll)))) * (cw + gap);
@@ -708,9 +729,6 @@ export class Overlay {
       const col = PLAYER_COLORS[pi], x0 = xOf(idx[0]) - cw / 2 - 8 * u, x1 = xOf(idx[idx.length - 1]) + cw / 2 + 8 * u;
       ctx.save(); ctx.globalAlpha = 0.16; ctx.fillStyle = col; ctx.beginPath(); ctx.roundRect(x0, cy - ch / 2 - 14 * u, x1 - x0, ch + 28 * u, 10 * u); ctx.fill();
       ctx.globalAlpha = 0.85; ctx.strokeStyle = col; ctx.lineWidth = 2 * u; ctx.stroke(); ctx.restore();
-      const hx = clamp((x0 + x1) / 2, Math.max(x0, 0) + 60 * u, Math.min(x1, v.W) - 60 * u);
-      ctx.fillStyle = col; ctx.beginPath(); ctx.roundRect(hx - 52 * u, cy - ch / 2 - 25 * u, 104 * u, 20 * u, 4 * u); ctx.fill();
-      text(ctx, `Player ${pi + 1}`, hx, cy - ch / 2 - 15 * u, 12 * u, '#fff', 800);
     }
     for (let i = 0; i < n; i++) {
       const x = xOf(i);
