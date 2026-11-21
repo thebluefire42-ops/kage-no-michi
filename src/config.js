@@ -53,11 +53,11 @@ export const WEAPONS = {
     rating: { speed: 4, damage: 3, range: 2 },
     basic: { name: 'Twin Slash', interval: 0.3, edge: 0.65, edgeMul: 2.1, lock: 0.19, dmg: 3.3, range: 1.9, arc: 115 }, // (2026-11-20: tip x2.1, was x1.4 at 4.5 dmg)
     // secondary: Whirlwind (the special until 2026-11-21): spin, cutting everything around you
-    secondary: { name: 'Whirlwind', cost: 15, cd: 4, lock: 0.5, dmg: 4, ticks: 5, dur: 0.5, radius: 2.2 }, // (2026-11-21: 15 energy, was 40; 4.5 per cut, was 7; cooldown 4 s, was 0.9)
+    secondary: { name: 'Whirlwind', cost: 15, cd: 4, lock: 0.5, dmg: 4.4, ticks: 5, dur: 0.5, radius: 2.2 }, // (2026-11-21: 15 energy, was 40; 4.5 per cut, was 7; cooldown 4 s, was 0.9)
     // special: Blade Waltz (2026-11-21): blink from enemy to enemy within `radius` of where you stood, one cut each
     // (`strikes` in all, `every` s apart; the least-cut enemy next), while enemies slow to timeScale. You can't be hit
     // during it and end beside the last enemy cut. Needs an enemy in reach (nothing is spent otherwise).
-    special: { name: 'Blade Waltz', cost: 45, cd: 12, lock: 0.2, strikes: 6, dmg: 13.5, radius: 5.5, every: 0.13, timeScale: 0.3 }, // (every 0.13 s, was 0.09: a little slower)
+    special: { name: 'Blade Waltz', cost: 45, cd: 12, lock: 0.2, strikes: 6, dmg: 16, radius: 5.5, every: 0.13, timeScale: 0.3 }, // (every 0.13 s, was 0.09: a little slower; 16 per cut since 2026-11-21, was 13.5)
   },
   crossbow: {
     name: 'Crossbow', jp: '弩', desc: 'High-precision with a slow reload.', move: 0.9,
@@ -154,7 +154,7 @@ export const WEAPONS = {
     // secondary: the orb is dashed on the ground at your feet and breaks: spirits rise out of it, and everything around takes
     // damage and is tethered (no slow since 2026-11-21); the orb forms again in your hand a moment later
     secondary: { name: 'Soul Drop', cost: 12, cd: 4.5, lock: 0.35, dmg: 5, radius: 2.2, flight: 0.16, reform: 0.55 }, // (2026-11-20: +50%, was 8 energy / 3 s)
-    special: { name: 'Call the Fallen', cost: 40, cd: 11.7, lock: 0.6, max: 4, leash: 9, hurtMul: 0.6 },
+    special: { name: 'Call the Fallen', cost: 36, cd: 11.7, lock: 0.6, max: 4, leash: 9, hurtMul: 0.6 },
   },
 };
 export const WEAPON_ORDER = ['katanas', 'knives', 'bo', 'orb', 'gloves', 'crossbow', 'heavy', 'staff', 'shield']; // (weapon select order; the locked ones last)
@@ -459,14 +459,14 @@ export const DIFFICULTY = [
   { key: 'hard',      name: 'Hard',      count: 1.3,  heavyW: 1.8,  shieldW: 1.5, heavyCap: 1,  shieldCap: 1,  dmg: 1.2 },
 ];
 export const DIFFICULTY_ODDS = [0.25, 0.5, 0.25];
-// the run's difficulty, chosen after the equipment (2026-11-21, the user's numbers: same enemy count; health ∓10%, damage ∓20%): enemy count, their max health,
+// the run's difficulty, chosen after the equipment (2026-11-21, the user's numbers: same enemy count; Easy -15% health / -25% damage, Hard +10% / +15%): enemy count, their max health,
 // the damage they deal. Normal is the game as it was.
 export const RUN_DIFF_ORDER = ['easy', 'normal', 'hard'];
 export const RUN_DIFFICULTY = {
   // nodeOdds: how often route nodes are easy / normal / hard; rewardMul: weights on the reward tiers (common..legendary)
-  easy:   { name: 'Easy',   jp: '易', color: '#3f7a4a', count: 1, hp: 0.90, dmg: 0.80, nodeOdds: [0.35, 0.5, 0.15], rewardMul: [0.72, 1, 1.4, 1.55], lines: ['−10% enemy health', '−20% enemy damage', 'Easier paths, better rewards'] },
+  easy:   { name: 'Easy',   jp: '易', color: '#3f7a4a', count: 1, hp: 0.85, dmg: 0.75, nodeOdds: [0.35, 0.5, 0.15], rewardMul: [0.72, 1, 1.4, 1.55], lines: ['−15% enemy health', '−25% enemy damage', 'Easier paths, better rewards'] },
   normal: { name: 'Normal', jp: '常', color: '#8a6a2a', count: 1,    hp: 1,    dmg: 1,    nodeOdds: null, rewardMul: null, lines: ['The path as it is'] },
-  hard:   { name: 'Hard',   jp: '難', color: '#9a2226', count: 1, hp: 1.10, dmg: 1.20, nodeOdds: [0.15, 0.5, 0.35], rewardMul: [0.8, 1, 1.25, 1.4], lines: ['+10% enemy health', '+20% enemy damage', 'Harder paths, better rewards'] },
+  hard:   { name: 'Hard',   jp: '難', color: '#9a2226', count: 1, hp: 1.10, dmg: 1.15, nodeOdds: [0.15, 0.5, 0.35], rewardMul: [0.8, 1, 1.25, 1.4], lines: ['+10% enemy health', '+15% enemy damage', 'Harder paths, better rewards'] },
 };
 // Nodes whose cards roll a rarity also roll a reward tier [common+, rare+, epic+, legendary]. Harder fights lean a little
 // toward better rewards, but not by much: an easy fight can still pay well, a hard one can pay badly.
