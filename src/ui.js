@@ -645,7 +645,7 @@ export class Overlay {
     return [
       { label: 'Music volume', val: pct(settings.music), step: (d) => { settings.music = clamp(Math.round((settings.music + d * 0.1) * 10) / 10, 0, 1); } },
       { label: 'Effects volume', val: pct(settings.sfx), step: (d) => { settings.sfx = clamp(Math.round((settings.sfx + d * 0.1) * 10) / 10, 0, 1); } },
-      { label: 'Enemy hit indicators', val: { off: 'Off', aoe: 'AoE charge only', on: 'On' }[settings.tele] || 'Off', step: (d) => { const i = TELE_MODES.indexOf(settings.tele); settings.tele = TELE_MODES[(Math.max(0, i) + d + TELE_MODES.length) % TELE_MODES.length]; } },
+      { label: 'Enemy hit indicators', val: { off: 'Off', heavy: 'Heavy / boss only', on: 'On' }[settings.tele] || 'Off', step: (d) => { const i = TELE_MODES.indexOf(settings.tele); settings.tele = TELE_MODES[(Math.max(0, i) + d + TELE_MODES.length) % TELE_MODES.length]; } },
     ];
   }
   updateSettings() {
