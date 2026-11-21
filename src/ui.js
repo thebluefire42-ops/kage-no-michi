@@ -6,6 +6,7 @@ import { drawWeapon, drawHumanoid, INK } from './rig.js';
 import { EQUIPMENT } from './equipment.js';
 import { RouteScreen } from './route.js';
 import { net } from './net.js';
+import { settings, saveSettings } from './settings.js';
 import { input } from './input.js';
 import { sfx, music } from './audio.js';
 import { fmtStat, drawIcon, drawCard } from './cards.js';
@@ -637,7 +638,48 @@ export function drawBanners(ctx, g) {
 export class Overlay {
   constructor(g) { this.g = g; this.sel = 0; this.t = 0; this.map = new RouteScreen(g); }
   // the pause menu's choices (Show map only when there is a route to show)
-  pauseItems() { const g = this.g; return ['Resume', ...(g.route && !g.training ? ['Show map'] : []), 'Quit to main menu']; }
+  pauseItems() { const g = this.g; return ['Resume', ...(g.route && !g.training ? ['Show map'] : []), 'Settings', 'Quit to main menu']; }
+  // Settings: three rows, up / down to pick, left / right (or the arrows, with the mouse) to change; back closes
+  settingRows() {
+    const pct = (v) => `${Math.round(v * 100)}%`;
+    return [
+      { label: 'Music volume', val: pct(settings.music), step: (d) => { settings.music = clamp(Math.round((settings.music + d * 0.1) * 10) / 10, 0, 1); } },
+      { label: 'Effects volume', val: pct(settings.sfx), step: (d) => { settings.sfx = clamp(Math.round((settings.sfx + d * 0.1) * 10) / 10, 0, 1); } },
+      { label: 'Enemy hit indicators', val: settings.tele ? 'On' : 'Off', step: () => { settings.tele = !settings.tele; } },
+    ];
+  }
+  updateSettings() {
+    const rows = this.settingRows(), m = input.mouse, v = this.g.view, mx = m.x * v.dpr, my = m.y * v.dpr;
+    if (input.pressed('back') || input.pressed('pause')) { input.eat('back'); input.eat('pause'); this.setOpen = false; sfx.flip(); return; }
+    if (input.pressed('up')) { this.setSel = (this.setSel + rows.length - 1) % rows.length; sfx.move(); }
+    if (input.pressed('down')) { this.setSel = (this.setSel + 1) % rows.length; sfx.move(); }
+    let d = input.pressed('left') ? -1 : input.pressed('right') || input.pressed('confirm') ? 1 : 0;
+    if (m.clicked && this.setRects) this.setRects.forEach((R, i) => {
+      if (my > R.y && my < R.y + R.h && mx > R.x && mx < R.x + R.w) { this.setSel = i; d = mx < R.mid ? -1 : 1; m.clicked = false; }
+    });
+    if (d) { input.eat('confirm'); rows[this.setSel].step(d); saveSettings(); sfx.select(); }
+  }
+  drawSettings(ctx) {
+    const v = this.g.view, u = uiScale(v), rows = this.settingRows(), pw = 460 * u, rh = 50 * u, ph = 70 * u + rows.length * rh + 40 * u;
+    const px = v.W / 2 - pw / 2, py = v.H / 2 - ph / 2;
+    ctx.fillStyle = 'rgba(8,6,14,0.6)'; ctx.fillRect(0, 0, v.W, v.H);
+    ctx.fillStyle = 'rgba(20,13,16,0.97)'; ctx.fillRect(px, py, pw, ph);
+    ctx.strokeStyle = 'rgba(232,196,112,0.8)'; ctx.lineWidth = 1.5 * u; ctx.strokeRect(px, py, pw, ph);
+    ctx.strokeStyle = 'rgba(232,196,112,0.3)'; ctx.lineWidth = 1; ctx.strokeRect(px + 6 * u, py + 6 * u, pw - 12 * u, ph - 12 * u);
+    outlinedText(ctx, 'Settings', v.W / 2, py + 32 * u, 26 * u, '#f8f0de');
+    text(ctx, '設定', v.W / 2, py + 54 * u, 11 * u, '#e8c470', 800, FONT_SERIF);
+    this.setRects = [];
+    rows.forEach((r, i) => {
+      const y = py + 70 * u + i * rh, on = i === this.setSel, vx = px + pw - 130 * u;
+      if (on) { ctx.fillStyle = 'rgba(200,48,46,0.35)'; ctx.fillRect(px + 14 * u, y + 4 * u, pw - 28 * u, rh - 8 * u); }
+      text(ctx, r.label, px + 30 * u, y + rh / 2, 16 * u, on ? '#fff8e8' : 'rgba(248,240,222,0.8)', 800, FONT_SANS, 'left');
+      text(ctx, '◀', vx - 46 * u, y + rh / 2, 14 * u, on ? '#e8c470' : 'rgba(232,196,112,0.45)', 800);
+      text(ctx, r.val, vx, y + rh / 2, 16 * u, '#fff4dc', 800);
+      text(ctx, '▶', vx + 46 * u, y + rh / 2, 14 * u, on ? '#e8c470' : 'rgba(232,196,112,0.45)', 800);
+      this.setRects.push({ x: vx - 64 * u, y, w: 128 * u, h: rh, mid: vx });
+    });
+    text(ctx, input.mode === 'pad' ? '▲▼ choose · ◀ ▶ change · Ⓑ back' : '↑↓ choose · ← → or click the arrows to change · Esc back', v.W / 2, py + ph - 20 * u, 11 * u, 'rgba(248,240,222,0.6)', 700);
+  }
   // Show map: the area's route, to look at and hover (nothing can be chosen)
   openMap() {
     const g = this.g, R = g.route;
@@ -651,6 +693,7 @@ export class Overlay {
   // the core stats in a panel at the top left and the chosen weapons (with imbuements and techniques) at the top right
   updatePause(dt) {
     this.t += dt;
+    if (this.setOpen) { this.updateSettings(); return; }
     if (this.map.active) { // looking at the map: back / pause / confirm close it
       this.map.update(dt);
       if (this.map.t > 0.3 && (input.pressed('back') || input.pressed('pause') || input.pressed('confirm'))) { input.eat('back'); input.eat('pause'); input.eat('confirm'); this.map.active = false; sfx.flip(); }
@@ -675,7 +718,7 @@ export class Overlay {
     if (input.pressed('confirm')) {
       input.eat('confirm'); input.eat('dash');
       const it = items[this.sel];
-      if (it === 'Resume') this.g.setPaused(false); else if (it === 'Show map') this.openMap(); else this.g.toTitle();
+      if (it === 'Resume') this.g.setPaused(false); else if (it === 'Show map') this.openMap(); else if (it === 'Settings') { this.setOpen = true; this.setSel = 0; sfx.flip(); } else this.g.toTitle();
     }
   }
   // every card this run's players picked (co-op: both, labelled), oldest first
@@ -695,8 +738,8 @@ export class Overlay {
     ctx.fillStyle = 'rgba(8,6,14,0.74)'; ctx.fillRect(0, 0, v.W, v.H);
     outlinedText(ctx, '一時停止  Paused', v.W / 2, v.H * 0.08, 36 * u, '#f8f0de');
     this.pauseItems().forEach((s2, i) => {
-      const y = v.H * 0.185 + i * 40 * u;
-      if (i === this.sel) { ctx.fillStyle = 'rgba(200,48,46,0.85)'; ctx.fillRect(v.W / 2 - 140 * u, y - 19 * u, 280 * u, 38 * u); }
+      const y = v.H * 0.17 + i * 36 * u;
+      if (i === this.sel) { ctx.fillStyle = 'rgba(200,48,46,0.85)'; ctx.fillRect(v.W / 2 - 140 * u, y - 16 * u, 280 * u, 32 * u); }
       text(ctx, s2, v.W / 2, y, 19 * u, '#f8f0de', 800);
     });
     // ---- this run's cards
@@ -752,6 +795,7 @@ export class Overlay {
       if (!net.connected) text(ctx, net.role === 'host' ? 'Your partner can join again with this code' : 'Disconnected', px + pw / 2, py - 10 * u, 11 * u, '#ff9a8a', 700);
     }
     if (this.map.active) this.map.draw(ctx); // Show map: over everything
+    if (this.setOpen) this.drawSettings(ctx);
   }
 
   updateEnd(dt) {

@@ -1,4 +1,5 @@
 // Small synthesized sound effects with Web Audio (no audio files needed).
+import { settings, onSettings } from './settings.js';
 let ctx = null, master = null, noiseBuf = null;
 const last = {};
 
@@ -7,7 +8,7 @@ export function initAudio() {
     if (!ctx) {
       ctx = new (window.AudioContext || window.webkitAudioContext)();
       master = ctx.createGain();
-      master.gain.value = 0.45;
+      master.gain.value = 0.45 * settings.sfx; // (Settings: effects volume)
       const comp = ctx.createDynamicsCompressor();
       master.connect(comp); comp.connect(ctx.destination);
       noiseBuf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
@@ -55,12 +56,17 @@ const songOf = (name) => (name || '').replace(/_(chill|tense)$/, '');
 const moodOf = (name) => (/_tense$/.test(name || '') ? 'tense' : /_chill$/.test(name || '') ? 'chill' : null);
 const mus = { want: null, muffled: false, playing: {}, bus: null, filter: null, pending: null, onMood: null };
 
+// the pause menu's Settings changed a volume: apply it at once
+onSettings((s) => {
+  if (master) master.gain.value = 0.45 * s.sfx;
+  if (mus.bus) mus.bus.gain.value = MUSIC_VOL * s.music;
+});
 function musicBus() {
   if (mus.bus) return true;
   if (!ctx) return false;
   mus.filter = ctx.createBiquadFilter(); mus.filter.type = 'lowpass'; mus.filter.Q.value = 0.8;
   mus.filter.frequency.value = mus.muffled ? MUFFLED_HZ : OPEN_HZ;
-  mus.bus = ctx.createGain(); mus.bus.gain.value = MUSIC_VOL;
+  mus.bus = ctx.createGain(); mus.bus.gain.value = MUSIC_VOL * settings.music; // (Settings: music volume)
   mus.filter.connect(mus.bus); mus.bus.connect(ctx.destination); // past the SFX compressor so hits don't duck the music
   setInterval(loopTick, 200);
   return true;
