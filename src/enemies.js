@@ -30,6 +30,7 @@ export class Enemy {
     if (!boss && g.levelInfo) this.dmgMul *= (DIFFICULTY[g.levelInfo.d] || DIFFICULTY[1]).dmg; // the route node's difficulty
     if (!boss && cfg.heavy && level <= 10) this.dmgMul *= AREA1_HEAVY_DMG; // area 1 heavies hit harder
     if (!boss && g.levelInfo && g.levelInfo.corrupt === 'bloodmoon') this.dmgMul *= CORRUPTION.bloodmoon.dmgMul; // Blood Moon
+    if (g.diffMod && g.diffMod.hp !== 1) { this.hpMax = Math.round(this.hpMax * g.diffMod.hp); this.hp = this.hpMax; } // the run's difficulty (bosses too)
     this.windupMul = boss ? 1 : AREA_WINDUP[level > 30 ? 3 : Math.floor((level - 1) / 10)] || 1; // slower, easier to read charges early on
     this.speed = cfg.speed * (boss ? 1 : ENEMY_SPEED_MUL * (1 + Math.min(0.25, level * 0.008)));
     if (!boss && cfg.heavy) { this.speed *= HEAVY_SPEED; this.windupMul /= HEAVY_SPEED; }

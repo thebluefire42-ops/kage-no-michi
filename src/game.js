@@ -1,12 +1,12 @@
 // Game orchestration: states, level flow, spawning, combat glue, camera and rendering.
 import { TAU, clamp, lerp, rand, pick, ease, isoX, isoY, screenToWorld, dist, angDiff } from './util.js';
-import { LIBRARY_COUNT, ADMIN_DAMAGE, ENEMIES, BOSSES, BIOME_POOLS, EARLY_ARCHER, ARCHER_WEIGHT, WAVES, OPEN_STRIKE_HP, levelBudget, PLAYER_BASE, COOP_BOSS_HP, COOP_ENEMY_COUNT, ELEMENTS, ELEMENT_RULES, HEAVY_WEIGHT, heavyCap, shieldCapFor, SHIELD_WEIGHT, SPAWN_REPEAT, SPAWN_GUARANTEE, EARLY_TOUGH, SHIELD, DROPS, MUSIC_TENSE, SPAWN_PACING, chainDamageFor, DIFFICULTY, DOJO_POOL, LIBRARY_POOL, LIBRARY_WISE_WEIGHT, POISON_GROUP } from './config.js';
+import { LIBRARY_COUNT, ADMIN_DAMAGE, ENEMIES, BOSSES, BIOME_POOLS, EARLY_ARCHER, ARCHER_WEIGHT, WAVES, OPEN_STRIKE_HP, levelBudget, PLAYER_BASE, COOP_BOSS_HP, COOP_ENEMY_COUNT, ELEMENTS, ELEMENT_RULES, HEAVY_WEIGHT, heavyCap, shieldCapFor, SHIELD_WEIGHT, SPAWN_REPEAT, SPAWN_GUARANTEE, EARLY_TOUGH, SHIELD, DROPS, MUSIC_TENSE, SPAWN_PACING, chainDamageFor, DIFFICULTY, DOJO_POOL, LIBRARY_POOL, LIBRARY_WISE_WEIGHT, POISON_GROUP, RUN_DIFFICULTY } from './config.js';
 import { World } from './world.js';
 import { Player } from './player.js';
 import { Enemy, updateProjectiles, updateHazards, drawHazards, drawProjectiles, drawProjectileShadows } from './enemies.js';
 import { Particles, Decals, Effects } from './particles.js';
 import { CardScreen, rollReward, applyUpgrade, drawIcon, ownedCards, removeCard, rewardTypeOf, atRarity } from './cards.js';
-import { RouteScreen, makeAreaMap, rewardOf, areaOf, AREAS, nodeOf, decorateNode, ensureKids, takePath, shiftWeights, smuggle } from './route.js';
+import { RouteScreen, makeAreaMap, rewardOf, areaOf, AREAS, nodeOf, decorateNode, ensureKids, takePath, shiftWeights, smuggle, setRouteDifficulty } from './route.js';
 import { ARTS, artOptions } from './arts.js';
 import { applyEquipment } from './equipment.js';
 import { tryFinisher } from './finishers.js';
@@ -64,7 +64,7 @@ export class Spawner {
     let pool = BIOME_POOLS[biome].filter((t) => ENEMIES[t].minLevel <= level);
     if (kind === 'dojo') pool = DOJO_POOL.slice();
     else if (kind === 'library') pool = [...pool, ...LIBRARY_POOL];
-    let budget = levelBudget(level) * (g.players.length > 1 ? COOP_ENEMY_COUNT : 1) * D.count * (kind === 'library' ? LIBRARY_COUNT : 1);
+    let budget = levelBudget(level) * (g.players.length > 1 ? COOP_ENEMY_COUNT : 1) * D.count * ((g.diffMod && g.diffMod.count) || 1) * (kind === 'library' ? LIBRARY_COUNT : 1);
     const list = [];
     // heavies and shield-bearers each have their own cap that grows through the area, every one already picked
     // makes the next of its kind less likely, and once the area is under way each level gets at least one of
@@ -272,7 +272,8 @@ export class Game {
   // weaponSets: [[w1, w2]] for solo, [[w1, w2], [w3, w4]] for co-op
   // role: 'solo' | 'local' (same screen) | 'host' / 'client' (online)
   // equips: each player's equipment set key (equipment.js), default when missing
-  startRun(weaponSets, role = null, startLevel = null, equips = []) {
+  startRun(weaponSets, role = null, startLevel = null, equips = [], diff = 'normal') {
+    this.runDiff = RUN_DIFFICULTY[diff] ? diff : 'normal'; this.diffMod = RUN_DIFFICULTY[this.runDiff]; setRouteDifficulty(this.runDiff);
     this.holyWater = 0; // Holy Water: levels left without corruption
     this.forceCorrupt = false; this.lastCorrupt = null; // the map's corrupt button; the last corruption seen
     if (typeof weaponSets[0] === 'string') weaponSets = [weaponSets];

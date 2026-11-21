@@ -65,7 +65,8 @@ export function startCorruption(g) {
       const puffs = [];
       const m = 5 + Math.floor(Math.random() * 4);
       const thick = Math.random() < CORRUPTION.mist.thick; // thick clouds hide everything under them; thin ones only some
-      for (let j = 0; j < m; j++) puffs.push({ dx: rand(-1.6, 1.6), dy: rand(-1.0, 1.0), r: rand(1.1, 2.0) * (thick ? 1.1 : 1), z: rand(1.3, 2.2), ph: rand(0, TAU) });
+      // (thin: in a thick cloud, about a third of the puffs are thinner patches you can half see through)
+      for (let j = 0; j < m; j++) puffs.push({ dx: rand(-1.6, 1.6), dy: rand(-1.0, 1.0), r: rand(1.1, 2.0) * (thick ? 1.1 : 1), z: rand(1.3, 2.2), ph: rand(0, TAU), thin: thick && Math.random() < 0.35 });
       C.clouds.push({ x: rand(-2, N + 2), y: rand(-2, N + 2), vx: rand(0.1, 0.26), vy: rand(-0.1, 0.05), puffs, thick, a: thick ? rand(0.93, 0.99) : rand(0.4, 0.58) });
     }
   }
@@ -179,8 +180,10 @@ export function drawCorruptionOver(ctx, g, t) {
     for (const q of c.puffs) {
       const x = c.x + q.dx + Math.sin(t * 0.3 + q.ph) * 0.15, y = c.y + q.dy;
       const sx = isoX(x, y), sy = isoY(x, y, q.z), R = q.r * 46;
+      // a thick cloud is not a solid wall: its thin patches let some sight through, and every puff breathes a little
+      const pa = a * (q.thin ? 0.5 : 1) * (c.thick ? 0.86 + 0.14 * Math.sin(t * 0.5 + q.ph * 2) : 1), solid = c.thick && !q.thin;
       const gr = ctx.createRadialGradient(sx, sy, 0, sx, sy, R);
-      gr.addColorStop(0, `rgba(214,220,228,${a})`); gr.addColorStop(c.thick ? 0.7 : 0.5, `rgba(200,208,218,${a * (c.thick ? 0.95 : 0.7)})`); gr.addColorStop(1, 'rgba(190,198,210,0)');
+      gr.addColorStop(0, `rgba(214,220,228,${pa})`); gr.addColorStop(solid ? 0.7 : 0.5, `rgba(200,208,218,${pa * (solid ? 0.95 : 0.7)})`); gr.addColorStop(1, 'rgba(190,198,210,0)');
       ctx.fillStyle = gr; ctx.save(); ctx.translate(sx, sy); ctx.scale(1.35, 0.8); ctx.beginPath(); ctx.arc(0, 0, R, 0, TAU); ctx.restore(); ctx.fill();
     }
   }

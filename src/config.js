@@ -459,6 +459,15 @@ export const DIFFICULTY = [
   { key: 'hard',      name: 'Hard',      count: 1.3,  heavyW: 1.8,  shieldW: 1.5, heavyCap: 1,  shieldCap: 1,  dmg: 1.2 },
 ];
 export const DIFFICULTY_ODDS = [0.25, 0.5, 0.25];
+// the run's difficulty, chosen after the equipment (2026-11-21, the user's numbers: ±10% each): enemy count, their max health,
+// the damage they deal. Normal is the game as it was.
+export const RUN_DIFF_ORDER = ['easy', 'normal', 'hard'];
+export const RUN_DIFFICULTY = {
+  // nodeOdds: how often route nodes are easy / normal / hard; rewardMul: weights on the reward tiers (common..legendary)
+  easy:   { name: 'Easy',   jp: '易', color: '#3f7a4a', count: 0.90, hp: 0.90, dmg: 0.90, nodeOdds: [0.35, 0.5, 0.15], rewardMul: [0.72, 1, 1.4, 1.55], lines: ['−10% enemies', '−10% enemy health', '−10% enemy damage', 'Easier paths, better rewards'] },
+  normal: { name: 'Normal', jp: '常', color: '#8a6a2a', count: 1,    hp: 1,    dmg: 1,    nodeOdds: null, rewardMul: null, lines: ['The path as it is'] },
+  hard:   { name: 'Hard',   jp: '難', color: '#9a2226', count: 1.10, hp: 1.10, dmg: 1.10, nodeOdds: [0.15, 0.5, 0.35], rewardMul: [0.8, 1, 1.25, 1.4], lines: ['+10% enemies', '+10% enemy health', '+10% enemy damage', 'Harder paths, better rewards'] },
+};
 // Nodes whose cards roll a rarity also roll a reward tier [common+, rare+, epic+, legendary]. Harder fights lean a little
 // toward better rewards, but not by much: an easy fight can still pay well, a hard one can pay badly.
 export const REWARD_ODDS = [

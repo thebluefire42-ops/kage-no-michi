@@ -14,6 +14,7 @@ import { Bestiary } from './bestiary.js';
 import { ARTS, ART_SLOTS, artPlain } from './arts.js';
 import { drawPadButton, padButtonWidth } from './padicons.js';
 import { EquipSelect } from './equipselect.js';
+import { DiffSelect } from './diffselect.js';
 
 // a button for an ability header: a controller shoulder button, or a key cap; returns its width
 function abilityButton(ctx, label, x, cy, h, pad, draw = true) {
@@ -82,7 +83,7 @@ const box = () => document.getElementById('netBox');
 const boxInput = () => document.getElementById('netInput');
 
 export class Menu {
-  constructor(g) { this.g = g; this.notice = ''; this.gallery = new CardGallery(g); this.bestiary = new Bestiary(g); this.equip = new EquipSelect(this); this.mainSel = 0; this.reset(); }
+  constructor(g) { this.g = g; this.notice = ''; this.gallery = new CardGallery(g); this.bestiary = new Bestiary(g); this.equip = new EquipSelect(this); this.diff = new DiffSelect(this); this.mainSel = 0; this.reset(); }
 
   reset() {
     this.mode = 'title'; this.t = 0; this.modeSel = 0;
@@ -127,7 +128,7 @@ export class Menu {
     net.off('equipOpen'); net.on('equipOpen', () => { if (this.mode === 'select') this.enterEquip(); });
     net.off('equipBack'); net.on('equipBack', () => { if (this.mode === 'equip') { this.mode = 'select'; this.t = 0; } });
     net.off('cursor'); net.on('cursor', (m) => { this.remoteSel = clamp(m.i | 0, 0, NW - 1); });
-    net.on('start', (m) => { this.hideBox(); this.g.startRun(m.sets, 'client', null, m.equips || []); });
+    net.on('start', (m) => { this.hideBox(); this.g.startRun(m.sets, 'client', null, m.equips || [], m.diff || 'normal'); });
     net.on('rejoin', (m) => { this.hideBox(); this.g.rejoinRun(m); }); // the host is mid-run: straight back in
     net.on('disconnect', () => { this.notice = 'The host left the game.'; this.reset(); });
   }
@@ -228,13 +229,13 @@ export class Menu {
     if (this.play === 'host') net.send('equipOpen', {});
   }
 
-  start(equips = []) {
+  start(equips = [], diff = 'normal') {
     if (this.play === 'training') { this.enterArts(); return; } // training: pick techniques next
     input.eat('confirm'); input.eat('dash'); input.eat('pause'); sfx.gate();
     const sets = this.joined[1] ? [this.picks[0].slice(), this.picks[1].slice()] : [this.picks[0].slice()];
     const lv = this.startLevel || 1;
-    if (this.play === 'host') { net.send('start', { sets, equips }); this.g.startRun(sets, 'host', lv, equips); }
-    else this.g.startRun(sets, this.play === 'local' ? 'local' : 'solo', lv, equips);
+    if (this.play === 'host') { net.send('start', { sets, equips, diff }); this.g.startRun(sets, 'host', lv, equips, diff); }
+    else this.g.startRun(sets, this.play === 'local' ? 'local' : 'solo', lv, equips, diff);
   }
 
   update(dt) {
@@ -278,8 +279,18 @@ export class Menu {
     if (this.mode === 'equip') {
       const r = this.equip.update(dt, clickNow, mx, my);
       if (r === 'back') { this.mode = 'select'; this.t = 0; sfx.flip(); if (this.play === 'host') net.send('equipBack', {}); }
-      else if (r === 'start') this.start(this.equip.equips());
+      else if (r === 'start') { // then the difficulty (the host / player 1 chooses; training skips it)
+        if (this.play === 'training' || this.play === 'client') this.start(this.equip.equips());
+        else { this.pendingEquips = this.equip.equips(); this.mode = 'difficulty'; this.t = 0; this.diff.open(); sfx.select(); }
+      }
       if ((this.play === 'host' || this.play === 'client') && !net.connected) { this.notice = 'Connection lost.'; this.backToModes(); }
+      return;
+    }
+    if (this.mode === 'difficulty') {
+      const r = this.diff.update(dt, clickNow, mx, my);
+      if (r === 'back') { this.mode = 'equip'; this.t = 0; this.equip.locked = [false, false]; sfx.flip(); }
+      else if (r === 'start') this.start(this.pendingEquips || this.equip.equips(), this.diff.key);
+      if (this.play === 'host' && !net.connected) { this.notice = 'Connection lost.'; this.backToModes(); }
       return;
     }
 
@@ -563,6 +574,7 @@ export class Menu {
 
     if (this.mode === 'arts') { this.drawArts(ctx, v, u, rt, pad); return; }
     if (this.mode === 'equip') { this.equip.draw(ctx); return; }
+    if (this.mode === 'difficulty') { this.diff.draw(ctx); return; }
     this.drawSelect(ctx, v, u, rt, pad);
   }
 

@@ -2,7 +2,12 @@
 // players pick one of two paths to the next level; every path shows the reward that level gives
 // when it is cleared (stat upgrades, an imbuement, a talent, supplies or the monk's sacrifice).
 import { TAU, clamp, lerp, ease, seededRng } from './util.js';
-import { ROUTE_ODDS, ROUTE_SHIFT, BOSSES, DIFFICULTY, DIFFICULTY_ODDS, REWARD_ODDS, REWARD_TIERS, RARITIES } from './config.js';
+import { ROUTE_ODDS, ROUTE_SHIFT, BOSSES, DIFFICULTY, DIFFICULTY_ODDS, REWARD_ODDS, REWARD_TIERS, RARITIES, RUN_DIFFICULTY } from './config.js';
+// the run's difficulty (Game.startRun sets it): it tilts the node difficulties and the reward tiers
+let RUN_D = RUN_DIFFICULTY.normal;
+// odds with extra weights on each outcome, normalised again (roll expects them to add up to 1)
+const tilt = (odds, mul) => { if (!mul) return odds; const w = odds.map((o, i) => o * mul[i]), t = w.reduce((a, b) => a + b, 0); return w.map((x) => x / t); };
+export function setRouteDifficulty(key) { RUN_D = RUN_DIFFICULTY[key] || RUN_DIFFICULTY.normal; }
 import { TOWN_NAMES, LIBRARY_NAMES, MONK_NAMES, monkIndexForArea, pickName } from './names.js';
 import { BIOMES } from './world.js';
 import { input } from './input.js';
@@ -111,8 +116,8 @@ export function decorateNodes(cols, area, rng) {
   }));
 }
 export function decorateNode(nd, area, rng = Math.random, used = new Set()) {
-  nd.d = IS_FIGHT(nd.r) ? roll(rng, DIFFICULTY_ODDS) : undefined;
-  nd.q = HAS_RARITY(nd.r) ? roll(rng, REWARD_ODDS[nd.d ?? 1]) : undefined;
+  nd.d = IS_FIGHT(nd.r) ? roll(rng, RUN_D.nodeOdds || DIFFICULTY_ODDS) : undefined;
+  nd.q = HAS_RARITY(nd.r) ? roll(rng, tilt(REWARD_ODDS[nd.d ?? 1], RUN_D.rewardMul)) : undefined;
   if (nd.r === 'stat') nd.name = pickName(TOWN_NAMES, rng, used);
   else if (nd.r === 'talent') nd.name = 'Library of ' + pickName(LIBRARY_NAMES, rng, used);
   else if (nd.r === 'sacrifice') { nd.monk = monkIndexForArea(area); nd.monkName = pickName(MONK_NAMES[nd.monk], rng, used); nd.name = 'Temple of ' + nd.monkName; }

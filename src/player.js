@@ -2028,7 +2028,7 @@ export class Player {
       return false;
     }
     if (g.noteCombat) g.noteCombat();
-    dmg *= ENEMY_DAMAGE_MUL * (this.takenMul || 1); // (Bound Souls: +25% damage taken)
+    dmg *= ENEMY_DAMAGE_MUL * (this.takenMul || 1) * ((g.diffMod && g.diffMod.dmg) || 1); // (Bound Souls: +25% damage taken; the run's difficulty)
     { const cw = this.charge && this.weapons[this.charge.slot], S = cw && this.art(cw, 'steadfast'); if (S) dmg *= S.mul; } // Steadfast
     // Bound Souls pact: half of the damage goes to the partner
     if (this.bound) {
