@@ -495,7 +495,7 @@ export class RouteScreen {
 
   // next = the level about to be chosen; readonly = online joiner (the host picks)
   open(route, next, { readonly = false, onChoose = () => {}, sel = 0 } = {}) {
-    this.route = route; this.next = next; this.readonly = readonly; this.onChoose = onChoose;
+    this.peek = false; this.route = route; this.next = next; this.readonly = readonly; this.onChoose = onChoose;
     this.col = next - route.first;
     this.reveal = null; this.sel = clamp(sel, 0, this.options.length - 1); this.t = 0; this.chosen = -1; this.goT = 0; this.active = true;
     this.hover = -1; this.hoverKid = null; this.look = null;
@@ -630,8 +630,13 @@ export class RouteScreen {
     ctx.fillStyle = `rgba(8,6,12,${0.86 * clamp(t / 0.3, 0, 1)})`; ctx.fillRect(0, 0, v.W, v.H);
     // header
     ctx.globalAlpha = clamp((t - 0.2) / 0.4, 0, 1);
+    if (this.peek) { // looked at from the pause menu
+      txt(ctx, `Area ${area + 1} · ${biome.name}`, v.W / 2, L.sy - 52 * u, 34 * u, '#f8f0de', 800, FONT_SERIF);
+      txt(ctx, `Your route · hover a node to see it · ${input.mode === 'pad' ? 'Ⓑ' : 'Esc'} to close`, v.W / 2, L.sy - 20 * u, 14 * u, 'rgba(248,240,222,0.8)', 700);
+    } else {
     txt(ctx, this.col === 0 ? `Area ${area + 1} · ${biome.name}` : 'Choose your route', v.W / 2, L.sy - 52 * u, 34 * u, '#f8f0de', 800, FONT_SERIF);
     txt(ctx, this.col === 0 ? 'A new land lies ahead' : `Level ${this.next} · each node shows the reward that path leads to`, v.W / 2, L.sy - 20 * u, 14 * u, 'rgba(248,240,222,0.8)', 700);
+    }
     ctx.globalAlpha = 1;
 
     // ---- the scroll unrolls from the centre
@@ -1022,6 +1027,7 @@ export class RouteScreen {
     ctx.save(); ctx.globalAlpha = clamp((t - 0.5) / 0.4, 0, 1);
     const pad = input.players[0] && input.players[0].mode === 'pad';
     const n = this.options.length;
+    if (this.peek) { ctx.restore(); return; } // (from the pause menu: the header says how to close it)
     const how = this.readonly ? 'The host is choosing the route…'
       : (n > 1 ? (pad ? '▲ ▼ choose a path · ' : '↑ ↓ or click a path · ') : '') + (this.kidList().length ? (this.look != null ? (pad ? '◀ back · ' : '← back · ') : (pad ? '▶ look ahead · ' : '→ look ahead · ')) : '') + (pad ? 'Ⓐ travel' : 'Enter to travel');
     txt(ctx, how, v.W / 2, L.py + L.ph + 34 * u, 14 * u, this.readonly ? '#8fd0ff' : 'rgba(248,240,222,0.8)', 800);

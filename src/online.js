@@ -157,6 +157,7 @@ export class OnlineHost {
     this.snapT -= dt;
     if (this.snapT > 0) return;
     this.snapT = SNAP_INTERVAL;
+    if (net.congested) return; // (a lag spike: skip this snapshot; its events wait for the next one)
     const g = this.g;
     const remote = this.remote();
     const snap = {

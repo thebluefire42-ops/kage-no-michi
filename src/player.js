@@ -1761,7 +1761,7 @@ export class Player {
     }
     if (s.pull) { // storm dancer: leaves and dust swirl inward from the edge of the storm
       for (let k = 0; k < 2; k++) if (Math.random() < dt * 40) {
-        const a = Math.random() * TAU, rr = R + s.pull.pullRange * (0.4 + Math.random() * 0.6), sp = 7 + Math.random() * 5;
+        const a = Math.random() * TAU, rr = R * (0.55 + Math.random() * 0.45) + s.pull.pullRange * Math.random(), sp = 7 + Math.random() * 5;
         const px = this.x + Math.cos(a) * rr, py = this.y + Math.sin(a) * rr;
         g.particles.emit(k ? 'dust' : 'leaf', px, py, 0.2 + Math.random() * 0.8, -Math.cos(a) * sp * 0.6 - Math.sin(a) * sp, -Math.sin(a) * sp * 0.6 + Math.cos(a) * sp, 0.3, 0.45, k ? 4 : 2.6, k ? 'rgba(220,235,255,0.8)' : g.world.bi === 1 ? '#e0542c' : g.world.bi === 2 ? '#e8f2ff' : '#f7c3d2', { drag: 1.5 });
       }

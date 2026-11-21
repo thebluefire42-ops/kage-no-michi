@@ -22,7 +22,7 @@ export const ARTS = {
   katanas: {
     flowingStep:   { slot: 'basic', name: 'Flowing Step', jp: '流歩', text: 'Basic kills restore 10 energy', desc: 'Killing enemies with {X} grants 10 {energy}', ki: 10 },
     crossedBlades: { slot: 'basic', name: 'Crossed Blades', jp: '十字斬', text: 'Blade-tip hits +25% damage', desc: '+25% {damage} at blade-tip with {X}', tipMul: 1.25 },
-    stormDancer:   { slot: 'secondary', name: 'Storm Dancer', jp: '嵐舞', text: 'Wider whirlwind that pulls enemies in', desc: '{Y} has +40% range and pulls enemies towards you', durMul: 1, tickMul: 1.0, radiusMul: 1.4, pull: 22, pullRange: 4.5 },
+    stormDancer:   { slot: 'secondary', name: 'Storm Dancer', jp: '嵐舞', text: 'Wider whirlwind that pulls enemies in', desc: '{Y} has +40% range and pulls enemies inside it towards you', durMul: 1, tickMul: 1.0, radiusMul: 1.4, pull: 22, pullRange: 0 }, // (pullRange 0 since 2026-11-21: only enemies in the whirlwind's own area are pulled, was +4.5 tiles beyond it)
     singleGale:    { slot: 'secondary', name: 'Single Gale', jp: '一颯', text: `Whirlwind: one ${d(whirl * 1.25)} damage cut`, desc: '{Y}: +25% {damage} in fewer cuts', dmgMul: 1.25, radiusMul: 1.15 },
   },
   crossbow: {

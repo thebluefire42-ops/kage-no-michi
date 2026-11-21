@@ -1800,7 +1800,12 @@ export class CardScreen {
     const how = this.ctl.mode === 'pad' ? '◀ ▶ to browse, Ⓐ to choose' : 'click a card, or ← → and Enter';
     const sub = this.mode === 'martial' ? "Weapon Artist's Set: choose your first technique" : this.mode === 'forget' ? `Make room for ${TALENTS[this.incoming.talent].name}` : this.mode === 'trade' ? `Bitter Brew: it becomes +${Math.round((this.incoming ? this.incoming.value : 0) * 100)}% attack damage` : this.mode === 'swap' ? 'Quick Swap: you then choose a new card of the same kind' : this.mode === 'swapNew' ? 'Quick Swap' : this.g.restStop ? 'A quiet rest at the tea house' : `Level ${this.g.level} cleared`;
     const top = this.cy - (this.rows || 1) * (this.ch + this.gap * 0.6) / 2 + this.gap * 0.3;
-    ctx.fillText(sac ? `The wandering monk offers a bargain. You must accept one.  ·  ${how}` : `${sub}  ·  ${how}`, v.W / 2, Math.min(this.cy - this.ch / 2, top) - 52 * this.k);
+    if (!sac) ctx.fillText(`${sub}  ·  ${how}`, v.W / 2, Math.min(this.cy - this.ch / 2, top) - 52 * this.k);
+    else if (this.picked < 0) { // under the cards: how to take one (the reroll button, when there is one, sits below this)
+      const pad = this.ctl.mode === 'pad', y = this.cy + (this.rows || 1) * (this.ch + this.gap * 0.6) / 2 + 30 * this.k;
+      if (pad) { drawPadButton(ctx, 'A', v.W / 2 - 34 * this.k, y, 22 * this.k); ctx.font = `700 ${Math.round(17 * this.k)}px "Zen Kaku Gothic New", sans-serif`; ctx.fillStyle = 'rgba(244,234,214,0.7)'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillText('Select', v.W / 2 - 16 * this.k, y + 1); ctx.textAlign = 'center'; }
+      else ctx.fillText('Click a card, or ← → and Enter to select', v.W / 2, y + 1);
+    }
     ctx.globalAlpha = 1;
 
     for (let i = 0; i < this.n && sac; i++) this.drawSacCard(ctx, i, t, player);

@@ -105,7 +105,7 @@ export const SACRIFICES = {
     needs: weaponIs('bo'), pay(p) { p.heavyPoleSlow = 1.2; }, get(p) { p.heavyPoleMax = true; },
   },
   lonelySoul: {
-    title: 'Lonely Soul', jp: '孤魂', weapon: 'orb', cost: 'At most 1 spirit', gain: 'Every spirit rises as a heavy enemy',
+    title: 'Lonely Soul', jp: '孤魂', weapon: 'orb', cost: 'At most {s:4} 1 spirit', gain: 'Every spirit is a heavy',
     needs: weaponIs('orb'), pay(p) { p.spiritMax = 1; }, get(p) { p.lonelySoul = true; },
   },
   soulTax: {

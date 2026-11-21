@@ -759,7 +759,7 @@ export class Game {
         this.state = 'play'; this.sacChoices.set(0, card.key); this.sacPending.delete(0);
         if (this.sacPending.size) this.banner({ title: 'Waiting for Player 2…', dur: 2, y: 0.25, size: 24 });
         this.checkSacDone();
-      }, p, { mode: 'sacrifice' });
+      }, p, { mode: 'sacrifice', reroll: () => rollSacrificeHands([p])[0] });
       return;
     }
     const hands = rollSacrificeHands(this.players); // co-op: Bound Souls is offered to both players or neither
@@ -767,7 +767,7 @@ export class Game {
       if (i >= this.players.length) { this.resolveSacrifices(); return; }
       const p = this.players[i];
       this.state = 'cards';
-      this.cards.open(hands[i], (card) => { this.sacChoices.set(i, card.key); pickFor(i + 1); }, p, { mode: 'sacrifice' });
+      this.cards.open(hands[i], (card) => { this.sacChoices.set(i, card.key); pickFor(i + 1); }, p, { mode: 'sacrifice', reroll: () => rollSacrificeHands([p])[0] });
     };
     pickFor(0);
   }
@@ -807,7 +807,7 @@ export class Game {
       net.send('sacpick', { key: card.key });
       this.state = 'play';
       this.banner({ title: 'Sacrifice chosen', sub: 'Waiting for the host…', dur: 2, y: 0.25, size: 24 });
-    }, me, { mode: 'sacrifice' });
+    }, me, { mode: 'sacrifice', reroll: () => { net.send('reroll', {}); return null; } }); // (the host rolls the new hand and sends it)
   }
 
   // host: the joiner chose card `index` from the cards we sent
@@ -926,6 +926,10 @@ export class Game {
   // host: the joiner spends a reroll token on the cards we sent: roll them a new hand
   onRemoteReroll() {
     const rp = this.players[1];
+    if (this.sacPending && this.sacPending.has(1) && rp) { // the joiner rerolled their sacrifice hand
+      if ((rp.rerolls ?? 0) <= 0) return;
+      rp.rerolls--; this.online.sendSac(rollSacrificeHands([rp])[0]); return;
+    }
     if (!this.pendingPicks || !this.pendingPicks.has(1) || !this.remoteReroll || !rp || (rp.rerolls ?? 0) <= 0) return;
     rp.rerolls--;
     this.remoteCards = this.remoteReroll(); this.online.sendCards(this.remoteCards);

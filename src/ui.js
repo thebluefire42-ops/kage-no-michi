@@ -4,6 +4,8 @@ import { TAU, clamp, lerp, ease, seededRng } from './util.js';
 import { WEAPONS, WEAPON_ORDER, UPGRADES, PLAYER_BASE, ELEMENTS, PLAYER_COLORS } from './config.js';
 import { drawWeapon, drawHumanoid, INK } from './rig.js';
 import { EQUIPMENT } from './equipment.js';
+import { RouteScreen } from './route.js';
+import { net } from './net.js';
 import { input } from './input.js';
 import { sfx, music } from './audio.js';
 import { fmtStat, drawIcon, drawCard } from './cards.js';
@@ -367,6 +369,11 @@ function drawPlayerPanel(ctx, g, p, idx, coop, u, pause = false) {
     for (let i = 0; i < p.lives; i++) lifeHeart(ctx, X(bx0 + 9 * u + i * 18 * u), rowY, 6.5 * u);
     rowY += 18 * u;
   }
+  if (pause) { // the equipment set and its bonus
+    const E = EQUIPMENT[p.equip] || EQUIPMENT.default, al = right ? 'right' : 'left', tx = right ? W - bx0 : bx0;
+    text(ctx, E.name, tx, rowY + 1 * u, 13 * u, coop ? col : '#e8c470', 800, FONT_SERIF, al);
+    (E.lines || []).forEach((ln, k) => text(ctx, ln, tx, rowY + 18 * u + k * 15 * u, 11.5 * u, p.equip === 'default' || !p.equip ? '#e8dcc0' : '#9fe0a0', 700, FONT_SANS, al));
+  }
   // Battle Rush: bonus damage for the first seconds of the level (beside the health stroke)
   if (p.rushT > 0 && !p.dead) {
     const str = `+${Math.round((p.rushMul - 1) * 100)}% DMG`;
@@ -628,13 +635,30 @@ export function drawBanners(ctx, g) {
 const END_AUTO_RETURN = 12;
 
 export class Overlay {
-  constructor(g) { this.g = g; this.sel = 0; this.t = 0; }
+  constructor(g) { this.g = g; this.sel = 0; this.t = 0; this.map = new RouteScreen(g); }
+  // the pause menu's choices (Show map only when there is a route to show)
+  pauseItems() { const g = this.g; return ['Resume', ...(g.route && !g.training ? ['Show map'] : []), 'Quit to main menu']; }
+  // Show map: the area's route, to look at and hover (nothing can be chosen)
+  openMap() {
+    const g = this.g, R = g.route;
+    if (!R) return;
+    const cur = clamp(g.level, R.first, R.last); // (this level's column: the path you took marked, the paths after it greyed)
+    this.map.open(R, cur, { readonly: true, sel: Math.max(0, (R.path && R.path[cur - R.first]) || 0) });
+    this.map.peek = true;
+  }
 
   // Pause: Resume / Quit at the top, this run's cards in a row below them (←/→ or the wheel scroll it),
   // the core stats in a panel at the top left and the chosen weapons (with imbuements and techniques) at the top right
   updatePause(dt) {
     this.t += dt;
-    if (input.pressed('up') || input.pressed('down')) { this.sel = 1 - (this.sel % 2); sfx.move(); }
+    if (this.map.active) { // looking at the map: back / pause / confirm close it
+      this.map.update(dt);
+      if (this.map.t > 0.3 && (input.pressed('back') || input.pressed('pause') || input.pressed('confirm'))) { input.eat('back'); input.eat('pause'); input.eat('confirm'); this.map.active = false; sfx.flip(); }
+      return;
+    }
+    const items = this.pauseItems(); this.sel = clamp(this.sel, 0, items.length - 1);
+    if (input.pressed('up')) { this.sel = (this.sel + items.length - 1) % items.length; sfx.move(); }
+    if (input.pressed('down')) { this.sel = (this.sel + 1) % items.length; sfx.move(); }
     const n = this.runCards().length;
     if (input.pressed('left')) { this.cardSel = Math.max(0, (this.cardSel || 0) - 1); sfx.move(); }
     if (input.pressed('right')) { this.cardSel = Math.min(Math.max(0, n - 1), (this.cardSel || 0) + 1); sfx.move(); }
@@ -642,7 +666,8 @@ export class Overlay {
     if (input.pressed('pause') || input.pressed('back')) { this.g.setPaused(false); input.eat('pause'); return; }
     if (input.pressed('confirm')) {
       input.eat('confirm'); input.eat('dash');
-      if (this.sel % 2 === 0) this.g.setPaused(false); else this.g.toTitle();
+      const it = items[this.sel];
+      if (it === 'Resume') this.g.setPaused(false); else if (it === 'Show map') this.openMap(); else this.g.toTitle();
     }
   }
   // every card this run's players picked (co-op: both, labelled), oldest first
@@ -660,9 +685,9 @@ export class Overlay {
     const g = this.g, v = g.view, u = uiScale(v), t = this.t;
     ctx.fillStyle = 'rgba(8,6,14,0.74)'; ctx.fillRect(0, 0, v.W, v.H);
     outlinedText(ctx, '一時停止  Paused', v.W / 2, v.H * 0.08, 36 * u, '#f8f0de');
-    ['Resume', 'Quit to main menu'].forEach((s2, i) => {
-      const y = v.H * 0.205 + i * 42 * u;
-      if (i === this.sel % 2) { ctx.fillStyle = 'rgba(200,48,46,0.85)'; ctx.fillRect(v.W / 2 - 140 * u, y - 19 * u, 280 * u, 38 * u); }
+    this.pauseItems().forEach((s2, i) => {
+      const y = v.H * 0.185 + i * 40 * u;
+      if (i === this.sel) { ctx.fillStyle = 'rgba(200,48,46,0.85)'; ctx.fillRect(v.W / 2 - 140 * u, y - 19 * u, 280 * u, 38 * u); }
       text(ctx, s2, v.W / 2, y, 19 * u, '#f8f0de', 800);
     });
     // ---- this run's cards
@@ -685,19 +710,16 @@ export class Overlay {
     if (n > 1) text(ctx, `${sel + 1} / ${n}   ·   ← → to browse`, v.W / 2, cy + ch * 0.5 + 28 * u, 12 * u, 'rgba(248,240,222,0.6)', 700);
     // ---- the top-left HUD stays as it is (co-op: both corners), its stats and imbuements named
     g.players.forEach((p, i) => drawPlayerPanel(ctx, g, p, i, g.players.length > 1, u, true));
-    // ---- each player's equipment set and its bonus: bottom-left (co-op: player 2 bottom-right)
-    g.players.forEach((p, i) => {
-      const E = EQUIPMENT[p.equip] || EQUIPMENT.default, lines = E.lines || [];
-      ctx.font = `800 ${15 * u}px ${FONT_SERIF}`; let tw = ctx.measureText(E.name).width;
-      ctx.font = `700 ${12 * u}px ${FONT_SANS}`; for (const ln of lines) tw = Math.max(tw, ctx.measureText(ln).width);
-      const pw = tw + 32 * u, ph = 36 * u + lines.length * 17 * u, px = i === 1 ? v.W - pw - 18 * u : 18 * u, py = v.H - ph - 18 * u;
-      const col = g.players.length > 1 ? PLAYER_COLORS[i] : '#e8c470';
-      ctx.fillStyle = 'rgba(16,10,14,0.88)'; ctx.fillRect(px, py, pw, ph);
-      ctx.strokeStyle = 'rgba(232,196,112,0.55)'; ctx.lineWidth = 1.2; ctx.strokeRect(px, py, pw, ph);
-      ctx.fillStyle = col; ctx.fillRect(px, py, 3 * u, ph);
-      text(ctx, E.name, px + 16 * u, py + 18 * u, 15 * u, col, 800, FONT_SERIF, 'left');
-      lines.forEach((ln, k) => text(ctx, ln, px + 16 * u, py + 38 * u + k * 17 * u, 12 * u, p.equip === 'default' || !p.equip ? '#e8dcc0' : '#9fe0a0', 700, FONT_SANS, 'left'));
-    });
+    // ---- online: the game code, always in view, so a partner who dropped out can join again with it
+    if (g.online && net.key) {
+      const pw = 250 * u, ph = 54 * u, px = v.W / 2 - pw / 2, py = v.H - ph - 16 * u;
+      ctx.fillStyle = 'rgba(16,10,14,0.9)'; ctx.fillRect(px, py, pw, ph);
+      ctx.strokeStyle = 'rgba(232,196,112,0.7)'; ctx.lineWidth = 1.2; ctx.strokeRect(px, py, pw, ph);
+      text(ctx, 'Game code', px + pw / 2, py + 14 * u, 11 * u, 'rgba(248,240,222,0.7)', 700);
+      text(ctx, net.key.split('').join(' '), px + pw / 2, py + 34 * u, 22 * u, '#ffd88a', 800, FONT_SANS);
+      if (!net.connected) text(ctx, net.role === 'host' ? 'Your partner can join again with this code' : 'Disconnected', px + pw / 2, py - 10 * u, 11 * u, '#ff9a8a', 700);
+    }
+    if (this.map.active) this.map.draw(ctx); // Show map: over everything
   }
 
   updateEnd(dt) {

@@ -40,6 +40,17 @@ class Net {
 
   get available() { return typeof window.Peer === 'function'; }
   get connected() { return this.status === 'connected' && this.conn && this.conn.open; }
+  // the link is backed up (a lag spike): more than this much is still waiting to go out. A WebRTC channel whose
+  // buffer overflows is closed by the browser, so the 20-a-second snapshots wait until it drains.
+  get congested() { const dc = this.conn && this.conn.dataChannel; return !!(dc && dc.bufferedAmount > 256 * 1024); }
+  // the PeerJS signalling server dropped us (a sleeping tab, a network blip): log in again with the same id, so the
+  // game code keeps working and the partner can join again. Without this the code was dead until the host restarted.
+  keepAlive(peer) {
+    peer.on('disconnected', () => {
+      const retry = () => { if (this.peer !== peer || peer.destroyed || !peer.disconnected) return; try { peer.reconnect(); } catch (e) { /* try again */ } setTimeout(retry, 5000); };
+      setTimeout(retry, 800);
+    });
+  }
 
   on(type, fn) { (this.handlers[type] || (this.handlers[type] = [])).push(fn); }
   off(type) { delete this.handlers[type]; }
@@ -61,10 +72,10 @@ class Net {
       this.attach(conn);
     });
     peer.on('error', (e) => {
-      if (e.type === 'unavailable-id') { this.host(); return; } // key collision: pick another
+      if (e.type === 'unavailable-id' && this.status === 'starting') { this.host(); return; } // key collision: pick another (not when logging back in)
       if (this.status !== 'connected') this.setStatus('error', friendlyError(e));
     });
-    peer.on('disconnected', () => { if (this.status === 'waiting') peer.reconnect(); });
+    this.keepAlive(peer);
   }
 
   join(key) {
@@ -80,6 +91,7 @@ class Net {
       this.attach(conn);
     });
     peer.on('error', (e) => { if (this.status !== 'connected') this.setStatus('error', e.type === 'peer-unavailable' ? `No game found for key ${key}.` : friendlyError(e)); });
+    this.keepAlive(peer);
     this.timer = setTimeout(() => { if (this.status === 'connecting') { this.setStatus('error', 'Could not connect. Check the key, or try again.'); } }, CONNECT_TIMEOUT);
   }
 
@@ -97,6 +109,7 @@ class Net {
 
   send(t, payload = {}) {
     if (!this.connected) return;
+    const dc = this.conn.dataChannel; if (dc && dc.bufferedAmount > 8 * 1024 * 1024) return; // (never overflow the channel: the browser would close it)
     try { this.conn.send({ t, ...payload }); } catch (e) { /* channel closing */ }
   }
 
