@@ -396,6 +396,7 @@ export class Player {
     if (this.leap) this.updateLeap(dt);
     if (this.bash) this.updateBash(dt);
     if (this.guard) this.updateGuard(dt);
+    if (this.waltz) this.updateWaltz(dt); // the joiner's Blade Waltz: its cuts (and its end) happen here on the host
     if (this.reflectT > 0) this.reflectT -= dt;
     { // the Shishi shield turns back shots only while charging (the bash dash, and a moment after); for a while after
       // a bash or the Bulwark, shots that do hit you deal half damage (projMul)
@@ -416,6 +417,7 @@ export class Player {
     if (!w) return;
     this.aimX = ax; this.aimY = ay;
     this.actionT = 0; this.spin = null; w.lockT = 0;
+    if (!special) this.waltz = null; // (the joiner attacks again: any waltz of theirs is over)
     if (special === 2) { w.ccd = 0; this.energy = Math.max(this.energy, this.kiCost(w.def.secondary)); this.trySecondary(slot, { ch }); }
     else if (special) { w.scd = 0; this.energy = Math.max(this.energy, this.kiCost(w.def.special, w)); this.trySpecial(slot); }
     else { w.cd = 0; this.energy = Math.max(this.energy, this.kiCost(w.def.basic)); this.tryBasic(slot, { ch, cb }); }

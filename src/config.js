@@ -249,14 +249,14 @@ export const ENEMIES = {
 };
 
 export const BOSSES = {
-  10: { type: 'ronin_boss', name: 'Ronin Warlord Kurogane', jp: '黒鉄', title: 'The Iron Ronin', hp: 1620, r: 0.55 },
+  10: { type: 'ronin_boss', name: 'Ronin Warlord Kurogane', jp: '黒鉄', title: 'The Iron Ronin', hp: 1377, r: 0.55 }, // (-15% on 2026-11-21: was 1620)
   20: { type: 'tengu',      name: 'Tengu of the Red Peak',  jp: '天狗', title: 'Lord of the Mountain Winds', hp: 3300, r: 0.6 },
   30: { type: 'oni_lord',   name: 'Oni Lord Shuten',        jp: '酒呑', title: 'Gate Guardian of the Kagerō', hp: 8400, r: 1.0 },
   33: { type: 'gensai',     name: 'Regent Gensai',          jp: '玄斎', title: 'Usurper of the Kagerō', hp: 10500, r: 0.5, hall: true },
 };
 // Boss hit damage (already +20% over the original tuning; the Tengu hits ~75% harder than before).
 export const BOSS_DMG = {
-  ronin_boss: { sweep: 22, dash: 17, whirl: 46 },
+  ronin_boss: { sweep: 22, dash: 17, whirl: 40 }, // (whirl, the great charged circle: 40 since 2026-11-21, was 46)
   tengu: { feather: 14, gust: 18, dive: 42 },
   oni_lord: { slam: 36, stomp: 24, wave: 22, charge: 31, fire: 7 },
   gensai: { iai: 38, crescent: 20, seal: 26, mirage: 24, slash: 22 },
