@@ -6,7 +6,7 @@ import { drawWeapon, drawHumanoid, INK } from './rig.js';
 import { EQUIPMENT } from './equipment.js';
 import { RouteScreen } from './route.js';
 import { net } from './net.js';
-import { settings, saveSettings } from './settings.js';
+import { settings, saveSettings, TELE_MODES } from './settings.js';
 import { input } from './input.js';
 import { sfx, music } from './audio.js';
 import { fmtStat, drawIcon, drawCard } from './cards.js';
@@ -645,7 +645,7 @@ export class Overlay {
     return [
       { label: 'Music volume', val: pct(settings.music), step: (d) => { settings.music = clamp(Math.round((settings.music + d * 0.1) * 10) / 10, 0, 1); } },
       { label: 'Effects volume', val: pct(settings.sfx), step: (d) => { settings.sfx = clamp(Math.round((settings.sfx + d * 0.1) * 10) / 10, 0, 1); } },
-      { label: 'Enemy hit indicators', val: settings.tele ? 'On' : 'Off', step: () => { settings.tele = !settings.tele; } },
+      { label: 'Enemy hit indicators', val: { off: 'Off', aoe: 'AoE charge only', on: 'On' }[settings.tele] || 'Off', step: (d) => { const i = TELE_MODES.indexOf(settings.tele); settings.tele = TELE_MODES[(Math.max(0, i) + d + TELE_MODES.length) % TELE_MODES.length]; } },
     ];
   }
   updateSettings() {
@@ -660,7 +660,7 @@ export class Overlay {
     if (d) { input.eat('confirm'); rows[this.setSel].step(d); saveSettings(); sfx.select(); }
   }
   drawSettings(ctx) {
-    const v = this.g.view, u = uiScale(v), rows = this.settingRows(), pw = 460 * u, rh = 50 * u, ph = 70 * u + rows.length * rh + 40 * u;
+    const v = this.g.view, u = uiScale(v), rows = this.settingRows(), pw = 500 * u, rh = 50 * u, ph = 70 * u + rows.length * rh + 40 * u;
     const px = v.W / 2 - pw / 2, py = v.H / 2 - ph / 2;
     ctx.fillStyle = 'rgba(8,6,14,0.6)'; ctx.fillRect(0, 0, v.W, v.H);
     ctx.fillStyle = 'rgba(20,13,16,0.97)'; ctx.fillRect(px, py, pw, ph);
@@ -670,13 +670,14 @@ export class Overlay {
     text(ctx, '設定', v.W / 2, py + 54 * u, 11 * u, '#e8c470', 800, FONT_SERIF);
     this.setRects = [];
     rows.forEach((r, i) => {
-      const y = py + 70 * u + i * rh, on = i === this.setSel, vx = px + pw - 130 * u;
+      const y = py + 70 * u + i * rh, on = i === this.setSel, vx = px + pw - 120 * u;
       if (on) { ctx.fillStyle = 'rgba(200,48,46,0.35)'; ctx.fillRect(px + 14 * u, y + 4 * u, pw - 28 * u, rh - 8 * u); }
       text(ctx, r.label, px + 30 * u, y + rh / 2, 16 * u, on ? '#fff8e8' : 'rgba(248,240,222,0.8)', 800, FONT_SANS, 'left');
-      text(ctx, '◀', vx - 46 * u, y + rh / 2, 14 * u, on ? '#e8c470' : 'rgba(232,196,112,0.45)', 800);
-      text(ctx, r.val, vx, y + rh / 2, 16 * u, '#fff4dc', 800);
-      text(ctx, '▶', vx + 46 * u, y + rh / 2, 14 * u, on ? '#e8c470' : 'rgba(232,196,112,0.45)', 800);
-      this.setRects.push({ x: vx - 64 * u, y, w: 128 * u, h: rh, mid: vx });
+      const vs = (r.val.length > 8 ? 13 : 16) * u; ctx.font = `800 ${vs}px ${FONT_SANS}`; const off = Math.max(46 * u, ctx.measureText(r.val).width / 2 + 16 * u); // (the arrows sit just outside the value)
+      text(ctx, '◀', vx - off, y + rh / 2, 14 * u, on ? '#e8c470' : 'rgba(232,196,112,0.45)', 800);
+      text(ctx, r.val, vx, y + rh / 2, vs, '#fff4dc', 800);
+      text(ctx, '▶', vx + off, y + rh / 2, 14 * u, on ? '#e8c470' : 'rgba(232,196,112,0.45)', 800);
+      this.setRects.push({ x: vx - off - 14 * u, y, w: 2 * off + 28 * u, h: rh, mid: vx });
     });
     text(ctx, input.mode === 'pad' ? '▲▼ choose · ◀ ▶ change · Ⓑ back' : '↑↓ choose · ← → or click the arrows to change · Esc back', v.W / 2, py + ph - 20 * u, 11 * u, 'rgba(248,240,222,0.6)', 700);
   }

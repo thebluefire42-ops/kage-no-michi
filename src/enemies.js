@@ -331,7 +331,7 @@ export class Enemy {
 
   drawTelegraph(ctx, t) {
     const T = this.tele;
-    if (!T || !settings.tele) return; // (Settings: enemy hit indicators off)
+    if (!T || !showTele(T)) return; // (Settings: enemy hit indicators off / AoE charge only)
     const k = this.state === 'windup' ? 1 - this.t / this.tDur : (T.k ?? 0.5);
     // normal enemies' markers are a little fainter (heavies and bosses keep them at full strength)
     const faint = !this.boss && !this.cfg.heavy;
@@ -543,6 +543,12 @@ function drawGensaiAura(ctx, e, sx, sy, t) {
 // with the windup, and an outline that only sharpens in the last moment before the hit.
 const TELE_A = 0.55; // overall telegraph opacity
 export const MIRAGE_W = 1.2; // Gensai's mirage dash lanes (his own dash and his clones')
+// Settings: is this wind-up's marker shown? 'aoe' keeps only area attacks (a circle, cone, ring, or a full-circle sweep)
+function showTele(T) {
+  if (settings.tele === 'on') return true;
+  if (settings.tele !== 'aoe') return false;
+  return T.kind === 'circle' || T.kind === 'cone' || T.kind === 'donut' || T.kind === 'ring' || (T.kind === 'arc' && T.arc >= TAU * 0.99);
+}
 const TELE_NORMAL_ALPHA = 0.45; // (2026-11-21: 0.7, then fainter still)
 export function drawTele(ctx, T, x, y, k, t) {
   const pulse = 0.5 + 0.5 * Math.sin(t * 20);
@@ -1033,7 +1039,7 @@ export function drawHazards(ctx, g, t) {
   for (const h of g.hazards) {
     if (h.kind === 'arrows' || h.kind === 'meteor') { drawTalentArea(ctx, h, t); continue; }
     if (h.kind === 'smoke') { drawSmoke(ctx, h, t); continue; }
-    if ((h.kind === 'marker' || h.kind === 'blast') && !settings.tele) continue;
+    if ((h.kind === 'marker' || h.kind === 'blast') && settings.tele === 'off') continue; // (ground blasts count as AoE)
     if (h.kind === 'marker' || h.kind === 'blast') drawTele(ctx, { kind: 'circle', x: h.x, y: h.y, r: h.r }, h.x, h.y, 1 - h.t / h.dur, t);
     else if (h.kind === 'slash') drawSlashLine(ctx, h, t);
     else if (h.kind === 'seal') drawSeal(ctx, h, t);
