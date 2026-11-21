@@ -5,10 +5,11 @@
 const PREFIX = 'kage-michi-v1-';
 const ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // no 0/O, 1/I/L
 const CONNECT_TIMEOUT = 12000;
+export const KEY_LEN = 2; // (2 since 2026-11-21: short to share; 31 x 31 = 961 codes, a taken one is simply rolled again)
 
 export function makeKey() {
   let k = '';
-  for (let i = 0; i < 6; i++) k += ALPHABET[Math.floor(Math.random() * ALPHABET.length)];
+  for (let i = 0; i < KEY_LEN; i++) k += ALPHABET[Math.floor(Math.random() * ALPHABET.length)];
   return k;
 }
 
@@ -17,7 +18,7 @@ export function parseKey(text) {
   if (!text) return '';
   const m = String(text).match(/[?&]join=([A-Za-z0-9]+)/);
   const raw = (m ? m[1] : text).toUpperCase().replace(/[^A-Z0-9]/g, '');
-  return raw.slice(0, 6);
+  return raw.slice(0, KEY_LEN);
 }
 
 export function inviteLink(key) {

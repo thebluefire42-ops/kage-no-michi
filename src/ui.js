@@ -385,6 +385,7 @@ function drawPlayerPanel(ctx, g, p, idx, coop, u, pause = false) {
     text(ctx, str, cx + 24 * u, cy + ch / 2 + 1, 12 * u, '#ffe0c0', 800, FONT_SANS, 'left');
   }
   if (pause) return;
+  if (g.online && g.localPlayer && p !== g.localPlayer()) { if (p.dead && coop) drawFallen(ctx, g, p, idx, u); return; } // online: only your own attacks and talents
   drawSlots(ctx, g, p, idx, coop, u); // (attacks, dash and talents, laid out like the controller)
   if (p.dead && coop) drawFallen(ctx, g, p, idx, u);
 }
@@ -455,7 +456,7 @@ function drawSlots(ctx, g, p, idx, coop, u) {
   const v = g.view;
   const pad = p.ctl.mode === 'pad';
   const slotS = 52 * u, DX = 57 * u, DY = 45 * u;
-  const cx = coop ? (idx === 0 ? v.W * 0.27 : v.W * 0.73) : v.W / 2, cy = v.H - 84 * u;
+  const cx = coop && !g.online ? (idx === 0 ? v.W * 0.27 : v.W * 0.73) : v.W / 2, cy = v.H - 84 * u; // (online: just yours, in the middle)
   ctx.globalAlpha = p.dead ? 0.4 : 1;
   const w = p.weapons[0];
   const labels = attackKeys(pad);
@@ -694,18 +695,32 @@ export class Overlay {
     const list = this.runCards(), n = list.length, sel = clamp(this.cardSel || 0, 0, Math.max(0, n - 1));
     this.cardScroll = lerp(this.cardScroll ?? sel, sel, 0.18);
     const ch = Math.min(v.H * 0.42, 300 * u), cw = ch * (230 / 340), gap = 14 * u, cy = v.H * 0.585;
-    text(ctx, '札  Cards this run', v.W / 2, cy - ch / 2 - 26 * u, 15 * u, '#e8c470', 800, FONT_SERIF);
+    text(ctx, '札  Cards this run', v.W / 2, cy - ch / 2 - (g.players.length > 1 ? 44 : 26) * u, 15 * u, '#e8c470', 800, FONT_SERIF);
     if (!n) text(ctx, 'No cards chosen yet', v.W / 2, cy, 18 * u, 'rgba(248,240,222,0.7)', 800, FONT_SERIF);
+    // co-op: player 2's cards come after a gap, each player's cards sit on a band in their colour under a
+    // "Player N" heading, and every card has a frame in that colour
+    const coopC = g.players.length > 1, slot = (i) => i + (coopC && list[i].player.index === 1 ? 0.6 : 0);
+    const span = n ? slot(n - 1) : 0, fits = (span + 1) * (cw + gap) <= v.W * 0.9; // all fit: the whole row centred; else the chosen card in the middle
+    const xOf = (i) => v.W / 2 + (slot(i) - (fits ? span / 2 : slot(Math.round(this.cardScroll)) + (this.cardScroll - Math.round(this.cardScroll)))) * (cw + gap);
+    if (coopC) for (const pi of [0, 1]) {
+      const idx = list.map((c, i) => (c.player.index === pi ? i : -1)).filter((i) => i >= 0);
+      if (!idx.length) continue;
+      const col = PLAYER_COLORS[pi], x0 = xOf(idx[0]) - cw / 2 - 8 * u, x1 = xOf(idx[idx.length - 1]) + cw / 2 + 8 * u;
+      ctx.save(); ctx.globalAlpha = 0.16; ctx.fillStyle = col; ctx.beginPath(); ctx.roundRect(x0, cy - ch / 2 - 14 * u, x1 - x0, ch + 28 * u, 10 * u); ctx.fill();
+      ctx.globalAlpha = 0.85; ctx.strokeStyle = col; ctx.lineWidth = 2 * u; ctx.stroke(); ctx.restore();
+      const hx = clamp((x0 + x1) / 2, Math.max(x0, 0) + 60 * u, Math.min(x1, v.W) - 60 * u);
+      ctx.fillStyle = col; ctx.beginPath(); ctx.roundRect(hx - 52 * u, cy - ch / 2 - 25 * u, 104 * u, 20 * u, 4 * u); ctx.fill();
+      text(ctx, `Player ${pi + 1}`, hx, cy - ch / 2 - 15 * u, 12 * u, '#fff', 800);
+    }
     for (let i = 0; i < n; i++) {
-      const fits = n * (cw + gap) <= v.W * 0.9; // all fit: the whole row centred; else the chosen card in the middle
-      const x = v.W / 2 + (i - (fits ? (n - 1) / 2 : this.cardScroll)) * (cw + gap);
+      const x = xOf(i);
       if (x < -cw || x > v.W + cw) continue;
-      const on = i === sel, { card, player, label } = list[i];
+      const on = i === sel, { card, player } = list[i];
       ctx.save(); ctx.translate(x, cy - (on ? 8 * u : 0)); const sc = on ? 1.04 : 0.92; ctx.scale(sc, sc);
       ctx.globalAlpha = on ? 1 : 0.78;
       drawCard(ctx, card, cw, ch, t + i * 0.7, { hover: on, tiltX: 0, tiltY: 0 }, player);
+      if (coopC) { ctx.strokeStyle = PLAYER_COLORS[player.index]; ctx.lineWidth = 3 * u; ctx.strokeRect(-cw / 2 - 3 * u, -ch / 2 - 3 * u, cw + 6 * u, ch + 6 * u); }
       ctx.restore();
-      if (label) text(ctx, label, x, cy + ch * 0.5 + 12 * u, 11 * u, PLAYER_COLORS[player.index], 800);
     }
     if (n > 1) text(ctx, `${sel + 1} / ${n}   ·   ← → to browse`, v.W / 2, cy + ch * 0.5 + 28 * u, 12 * u, 'rgba(248,240,222,0.6)', 700);
     // ---- the top-left HUD stays as it is (co-op: both corners), its stats and imbuements named

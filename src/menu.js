@@ -7,7 +7,7 @@ import { BIOMES } from './world.js';
 import { drawWeapon, INK } from './rig.js';
 import { input } from './input.js';
 import { sfx } from './audio.js';
-import { net, parseKey, inviteLink } from './net.js';
+import { net, parseKey, inviteLink, KEY_LEN } from './net.js';
 import { uiScale, text, outlinedText, FONT_SERIF, FONT_SANS, WPAL, WICON, weaponIcon, weaponIconBox, attackKeys, drawFaceButton } from './ui.js';
 import { CardGallery } from './gallery.js';
 import { Bestiary } from './bestiary.js';
@@ -139,7 +139,7 @@ export class Menu {
 
   startJoin(prefill = '') {
     this.mode = 'join'; this.t = 0; this.play = 'client';
-    this.showBox(prefill, false, 'Game key (e.g. K7MQ2X) or invite link', 0.5);
+    this.showBox(prefill, false, 'Game key (e.g. K7) or invite link', 0.5);
     net.off('connected'); net.off('status');
     net.on('connected', () => { sfx.select(); this.hideBox(); this.enterSelect('client'); });
     this.listenClient();
@@ -148,7 +148,7 @@ export class Menu {
 
   tryJoin(text) {
     const key = parseKey(text);
-    if (key.length !== 6) { this.notice = 'A game key has 6 letters/numbers.'; sfx.flip(); return; }
+    if (key.length !== KEY_LEN) { this.notice = `A game code has ${KEY_LEN} letters/numbers.`; sfx.flip(); return; }
     this.notice = '';
     net.join(key);
   }
@@ -531,8 +531,8 @@ export class Menu {
       } else {
         text(ctx, 'Your game key', v.W / 2, v.H * 0.28, 16 * u, 'rgba(248,240,222,0.8)', 700);
         // key tiles
-        const k = net.key, tw = 64 * u, gap = 10 * u, x0 = v.W / 2 - (6 * tw + 5 * gap) / 2;
-        for (let i = 0; i < 6; i++) {
+        const k = net.key, n = k.length, tw = 64 * u, gap = 10 * u, x0 = v.W / 2 - (n * tw + (n - 1) * gap) / 2;
+        for (let i = 0; i < n; i++) {
           const x = x0 + i * (tw + gap), y = v.H * 0.33;
           ctx.fillStyle = 'rgba(30,22,38,0.92)'; ctx.fillRect(x, y, tw, tw * 1.15);
           ctx.strokeStyle = '#e8c470'; ctx.lineWidth = 2; ctx.strokeRect(x, y, tw, tw * 1.15);
