@@ -633,7 +633,6 @@ export function drawBanners(ctx, g) {
 // title, mode select and weapon select live in menu.js
 
 // ---------------------------------------------------------------- pause / end screens
-const END_AUTO_RETURN = 12;
 
 export class Overlay {
   constructor(g) { this.g = g; this.sel = 0; this.t = 0; this.map = new RouteScreen(g); }
@@ -759,8 +758,8 @@ export class Overlay {
     this.t += dt;
     // online: both go back to the weapon select together (still connected); otherwise to the main menu
     const leave = () => (this.g.online ? this.g.toLobby() : this.g.toTitle());
-    if (this.t > 1.2 && (input.pressed('confirm') || input.pressed('pause') || input.mouse.clicked)) { input.eat('confirm'); input.eat('pause'); leave(); return; }
-    if (this.t > END_AUTO_RETURN) leave();
+    // (no automatic return: the screen stays until you press A / Enter or click)
+    if (this.t > 1.2 && (input.pressed('confirm') || input.mouse.clicked)) { input.eat('confirm'); input.eat('pause'); leave(); return; }
   }
 
   drawEnd(ctx, win) {
@@ -768,22 +767,52 @@ export class Overlay {
     const a = clamp(t / 0.8, 0, 1);
     ctx.fillStyle = win ? `rgba(30,20,8,${0.72 * a})` : `rgba(20,4,8,${0.8 * a})`; ctx.fillRect(0, 0, v.W, v.H);
     ctx.save(); ctx.globalAlpha = a;
-    // ink brush slash behind the title
+    // ink brush slash behind the title (higher than before: the damage overview sits below)
     ctx.fillStyle = win ? 'rgba(200,150,40,0.35)' : 'rgba(140,10,20,0.45)';
-    ctx.beginPath(); ctx.moveTo(v.W * 0.2, v.H * 0.3); ctx.quadraticCurveTo(v.W * 0.5, v.H * 0.18, v.W * 0.82, v.H * 0.24); ctx.lineTo(v.W * 0.8, v.H * 0.36); ctx.quadraticCurveTo(v.W * 0.5, v.H * 0.32, v.W * 0.18, v.H * 0.38); ctx.closePath(); ctx.fill();
-    outlinedText(ctx, win ? '勝利' : '敗北', v.W / 2, v.H * 0.28, 110 * u, win ? '#ffd45e' : '#e04848', 'rgba(10,6,12,0.9)', 800, FONT_SERIF, 8 * u);
-    outlinedText(ctx, win ? 'Victory — Gensai has fallen, the Kagerō are free' : 'Defeat — your path ends here', v.W / 2, v.H * 0.43, 28 * u, '#f8f0de');
+    ctx.beginPath(); ctx.moveTo(v.W * 0.2, v.H * 0.17); ctx.quadraticCurveTo(v.W * 0.5, v.H * 0.06, v.W * 0.82, v.H * 0.12); ctx.lineTo(v.W * 0.8, v.H * 0.23); ctx.quadraticCurveTo(v.W * 0.5, v.H * 0.2, v.W * 0.18, v.H * 0.25); ctx.closePath(); ctx.fill();
+    outlinedText(ctx, win ? '勝利' : '敗北', v.W / 2, v.H * 0.15, 88 * u, win ? '#ffd45e' : '#e04848', 'rgba(10,6,12,0.9)', 800, FONT_SERIF, 7 * u);
+    outlinedText(ctx, win ? 'Victory — Gensai has fallen, the Kagerō are free' : 'Defeat — your path ends here', v.W / 2, v.H * 0.27, 24 * u, '#f8f0de');
     const rs = g.runStats;
     const m = Math.floor(rs.time / 60), s = Math.floor(rs.time % 60);
-    const lines = [`Level reached: ${g.level}`, `Enemies slain: ${rs.kills}`, `Damage dealt: ${Math.round(rs.damage)}`, `Time: ${m}:${String(s).padStart(2, '0')}`, `Cards taken: ${rs.upgrades}`];
-    lines.forEach((l, i) => text(ctx, l, v.W / 2, v.H * 0.53 + i * 26 * u, 17 * u, 'rgba(248,240,222,0.9)', 700));
+    // the run in one row: four small plaques
+    const facts = [['Level', `${g.level}`], ['Enemies slain', `${rs.kills}`], ['Time', `${m}:${String(s).padStart(2, '0')}`], ['Cards', `${rs.upgrades}`]];
+    { const fw = 128 * u, fh = 46 * u, gap = 10 * u, y = v.H * 0.33, x0 = v.W / 2 - (facts.length * fw + (facts.length - 1) * gap) / 2;
+      facts.forEach(([lab, val], i) => {
+        const x = x0 + i * (fw + gap);
+        ctx.fillStyle = 'rgba(16,10,14,0.82)'; ctx.fillRect(x, y, fw, fh); ctx.strokeStyle = 'rgba(232,196,112,0.45)'; ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, y + 0.5, fw - 1, fh - 1);
+        text(ctx, lab, x + fw / 2, y + 13 * u, 10.5 * u, 'rgba(248,240,222,0.65)', 700);
+        text(ctx, val, x + fw / 2, y + 31 * u, 18 * u, '#fff4dc', 800, FONT_SERIF);
+      }); }
+    // damage: one panel per player, a bar per source (the weapon's abilities by name, spirits, imbuements, talents)
+    { const n = g.players.length, pw = Math.min(400 * u, (v.W - 60 * u) / n - 10 * u), top = v.H * 0.33 + 58 * u, bottom = v.H * 0.84 - 40 * u;
+      const total = Math.max(1, rs.damage || 0);
+      g.players.forEach((p, i) => {
+        const x = v.W / 2 + (i - (n - 1) / 2) * (pw + 20 * u) - pw / 2, col = n > 1 ? PLAYER_COLORS[i] : '#e8c470';
+        const mine = (rs.pd && rs.pd[i]) || 0, src = (rs.pa && rs.pa[i]) || {}, w = p.weapons[0];
+        const rows = Object.entries(src).filter(([, d]) => d > 0).sort((q, r) => r[1] - q[1]).map(([k, d]) => [damageLabel(k, w), d, damageColor(k)]);
+        const rowH = clamp((bottom - top - 44 * u) / Math.max(1, rows.length), 16 * u, 24 * u), ph = 44 * u + Math.max(1, rows.length) * rowH + 6 * u;
+        ctx.fillStyle = 'rgba(16,10,14,0.86)'; ctx.fillRect(x, top, pw, ph);
+        ctx.strokeStyle = col; ctx.lineWidth = 1.5 * u; ctx.strokeRect(x, top, pw, ph); ctx.fillStyle = col; ctx.fillRect(x, top, 4 * u, ph);
+        text(ctx, n > 1 ? `Player ${i + 1} · ${w.def.name}` : w.def.name, x + 16 * u, top + 16 * u, 14 * u, col, 800, FONT_SERIF, 'left');
+        text(ctx, `${Math.round(mine)} damage${n > 1 ? `  (${Math.round((mine / total) * 100)}%)` : ''}`, x + pw - 12 * u, top + 16 * u, 13 * u, '#fff4dc', 800, FONT_SANS, 'right');
+        ctx.fillStyle = 'rgba(232,196,112,0.35)'; ctx.fillRect(x + 12 * u, top + 30 * u, pw - 24 * u, 1);
+        if (!rows.length) text(ctx, 'No damage dealt', x + pw / 2, top + 44 * u + rowH / 2, 12 * u, 'rgba(248,240,222,0.55)', 700);
+        const lw = 118 * u, bx = x + 14 * u + lw, bw = pw - lw - 104 * u, best = rows.length ? rows[0][1] : 1;
+        rows.forEach(([lab, d, c], j) => {
+          const y = top + 44 * u + j * rowH + rowH / 2;
+          text(ctx, lab, x + 14 * u, y, 11.5 * u, 'rgba(248,240,222,0.88)', 700, FONT_SANS, 'left');
+          ctx.fillStyle = 'rgba(255,255,255,0.07)'; ctx.fillRect(bx, y - rowH * 0.28, bw, rowH * 0.56);
+          ctx.fillStyle = c; ctx.fillRect(bx, y - rowH * 0.28, Math.max(2, bw * (d / best)), rowH * 0.56);
+          text(ctx, `${Math.round(d)}`, x + pw - 12 * u, y, 11.5 * u, '#fff4dc', 800, FONT_SANS, 'right');
+          text(ctx, `${Math.round((d / Math.max(1, mine)) * 100)}%`, bx + bw + 8 * u, y, 10 * u, 'rgba(248,240,222,0.55)', 700, FONT_SANS, 'left');
+        });
+      }); }
     if (t > 1.2) {
       const [bx, by, bw, bh] = [v.W / 2 - 170 * u, v.H * 0.84 - 26 * u, 340 * u, 52 * u];
       ctx.fillStyle = `rgba(200,48,46,${0.8 + 0.2 * Math.sin(g.realTime * 4)})`; ctx.fillRect(bx, by, bw, bh);
       ctx.strokeStyle = '#f4d690'; ctx.lineWidth = 2; ctx.strokeRect(bx, by, bw, bh);
       const where = g.online ? 'weapon select' : 'main menu';
       text(ctx, input.mode === 'pad' ? `Ⓐ  Return to ${where}` : `Enter — Return to ${where}`, v.W / 2, by + bh / 2, 18 * u, '#fff8e8', 800);
-      text(ctx, `Returning ${g.online ? 'together ' : ''}automatically in ${Math.max(0, Math.ceil(END_AUTO_RETURN - t))}s`, v.W / 2, by + bh + 22 * u, 12 * u, 'rgba(248,240,222,0.6)', 700);
     }
     ctx.restore();
   }
@@ -897,4 +926,11 @@ function elemBadge(ctx, k, x, y, size) {
   ctx.fillStyle = 'rgba(16,12,20,0.92)'; ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill();
   ctx.strokeStyle = col; ctx.lineWidth = Math.max(1, size * 0.08); ctx.beginPath(); ctx.arc(x, y, r - ctx.lineWidth / 2, 0, TAU); ctx.stroke();
   drawElementMark(ctx, k, x, y + (k === 'lightning' || k === 'burn' ? 0 : 0.3), size / 19, col);
+}
+
+// the end screen's names and colours for damage sources (game.js damageSource)
+const SOURCE_LABEL = { spirits: 'Spirits', shadows: 'Shadow clones', lightning: 'Lightning', burn: 'Burn', poison: 'Poison', arrowRain: 'Arrow Rain' };
+function damageLabel(k, w) { if (k === 'basic' || k === 'secondary' || k === 'special') return (w && w.def[k] && w.def[k].name) || k; return SOURCE_LABEL[k] || k; }
+function damageColor(k) {
+  return { basic: '#5a8ae0', secondary: '#d8a628', special: '#d84a3a', spirits: '#a8dcff', shadows: '#8a6ad0', lightning: '#ffe46a', burn: '#ff8a3c', poison: '#7be36a', arrowRain: '#e8c470' }[k] || '#c8bca8';
 }

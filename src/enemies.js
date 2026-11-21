@@ -216,7 +216,7 @@ export class Enemy {
       if (!P.net && P.tick <= 0) { // every half second: the poison's share (fractions carry over)
         P.tick += 0.5; P.acc += Math.min(P.pool - P.acc, P.rate * 0.5);
         const n = Math.floor(P.acc);
-        if (n >= 1) { P.acc -= n; P.pool -= n; g.damageEnemy(this, n, false, 0, 0, 0, 0, { dot: true, player: P.player }); }
+        if (n >= 1) { P.acc -= n; P.pool -= n; g.damageEnemy(this, n, false, 0, 0, 0, 0, { dot: true, player: P.player, poison: true }); }
       }
       if (Math.random() < dt * 6) g.particles.emit('glow', this.x + rand(-0.3, 0.3), this.y + rand(-0.3, 0.3), rand(0.4, 1.2), 0, 0, 0.6, 0.6, 2, '#8fe05a');
       if ((!P.net && P.pool < 1) || this.dead) this.poison = null;
@@ -643,7 +643,7 @@ function rockImpact(g, q, hit) {
     const dx = main ? ux : (e.x - q.x) / (d || 1), dy = main ? uy : (e.y - q.y) / (d || 1);
     let { dmg, crit } = q.from.rollDamage(main ? q.base : q.base * 0.5, q.weapon);
     if (q.impact && pinnedBehind(g, e, dx, dy)) { dmg = Math.round(dmg * q.impact); g.fx.text(e.x, e.y, 'Crushed!', '#e8b070', 12); }
-    g.damageEnemy(e, dmg, crit, dx, dy, main ? q.knock : q.knock * 0.5, main ? 0.25 : 0.1, { player: q.from, weapon: q.weapon, sound: 'heavyHit' });
+    g.damageEnemy(e, dmg, crit, dx, dy, main ? q.knock : q.knock * 0.5, main ? 0.25 : 0.1, { player: q.from, weapon: q.weapon, sound: 'heavyHit', ability: q.ability });
     if (q.from.glovesHit) q.from.glovesHit(q.weapon);
   }
 }
@@ -682,7 +682,7 @@ function spiritBurst(g, q) {
     const dx = e.x - q.x, dy = e.y - q.y, d = Math.hypot(dx, dy);
     if (d > q.burst + e.r) continue;
     const { dmg, crit } = q.from.rollDamage(q.base, q.weapon);
-    g.damageEnemy(e, dmg, crit, dx / (d || 1), dy / (d || 1), 1, 0.05, { player: q.from, weapon: q.weapon, vuln: true });
+    g.damageEnemy(e, dmg, crit, dx / (d || 1), dy / (d || 1), 1, 0.05, { player: q.from, weapon: q.weapon, vuln: true, ability: q.ability });
     if (q.vuln && !e.dead) { e.vulnT = q.vuln; e.vulnMul = q.vulnMul || 1.2; } // blessed: +20% damage from everything else for a while
     hits++;
   }
@@ -838,7 +838,7 @@ export function updateProjectiles(g, dt) {
           const third = q.third3 && q.from && (q.from.kHits = ((q.from.kHits || 0) + 1) % 3) === 0; // Third Strike: every third kunai hit crits
           const { dmg, crit } = q.from.rollDamage(q.base * mul, q.weapon, !!q.forceCrit || third);
           const l = Math.hypot(q.vx, q.vy) || 1;
-          g.damageEnemy(e, dmg, crit, q.vx / l, q.vy / l, q.knock || 1.5, 0.1, { player: q.from, weapon: q.weapon, sound: q.sound, shudder: q.shudder, mark: q.mark, markMul: q.markMul, entangle: q.entangle, bossSlow: q.bossSlow, storm: q.storm, orb: q.seek ? true : undefined });
+          g.damageEnemy(e, dmg, crit, q.vx / l, q.vy / l, q.knock || 1.5, 0.1, { player: q.from, weapon: q.weapon, ability: q.ability, sound: q.sound, shudder: q.shudder, mark: q.mark, markMul: q.markMul, entangle: q.entangle, bossSlow: q.bossSlow, storm: q.storm, orb: q.seek ? true : undefined });
           if (q.seek) wispHit(g, q, e); // spirit orb: tether it
           if (q.sparks) g.particles.burst('spark', e.x, e.y, 0.6, 4, 6, 0.16, 1, '#ffd890');
           (q.hit || (q.hit = new Set())).add(e);
@@ -924,7 +924,7 @@ export function updateHazards(g, dt, pdt = dt) {
       h.t -= pdt; h.tick -= pdt;
       if (h.tick <= 0) {
         h.tick += h.every || 0.25;
-        for (const e of enemiesIn(g, h.x, h.y, h.r)) { const { dmg, crit } = h.from.rollDamage(h.dmg); g.damageEnemy(e, dmg, crit, 0, 0, 0.5, 0.05, { player: h.from }); }
+        for (const e of enemiesIn(g, h.x, h.y, h.r)) { const { dmg, crit } = h.from.rollDamage(h.dmg); g.damageEnemy(e, dmg, crit, 0, 0, 0.5, 0.05, { player: h.from, talent: 'arrowRain' }); }
         for (let k = 0; k < 4; k++) { const a = rand(0, TAU), r = Math.sqrt(Math.random()) * h.r; g.particles.emit('dust', h.x + Math.cos(a) * r, h.y + Math.sin(a) * r, 0.05, 0, 0, 0.3, 0.4, 3, '#c8b088', { under: true }); }
         sfx.throwKnife();
       }

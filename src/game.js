@@ -289,7 +289,7 @@ export class Game {
       this.players[0].puppet = true;
       this.online = new OnlineClient(this);
     }
-    this.runStats = { kills: 0, time: 0, damage: 0, upgrades: 0 };
+    this.runStats = { kills: 0, time: 0, damage: 0, upgrades: 0, pd: [0, 0], pa: [{}, {}] };
     this.spirits = []; this.fallen = []; this.soulTrails = [];
     this.routeNext = 0; this.routeScreen.active = false;
     this.state = 'play';
@@ -319,7 +319,7 @@ export class Game {
       const w = this.players[0].weapons[slot], A = w && ARTS[w.key][key];
       if (A) w.arts = { ...(w.arts || {}), [A.slot]: key };
     }
-    this.runStats = { kills: 0, time: 0, damage: 0, upgrades: 0 };
+    this.runStats = { kills: 0, time: 0, damage: 0, upgrades: 0, pd: [0, 0], pa: [{}, {}] };
     this.spirits = []; this.fallen = []; this.soulTrails = [];
     this.routeNext = 0; this.routeScreen.active = false;
     this.state = 'play'; this.monkVisited = new Set(); this.monkActive = false;
@@ -1317,6 +1317,10 @@ export class Game {
     if (src && src.player && !src.spirit && !dot && !chain) src.player.focusE = e;
     e.hp -= dmg;
     this.runStats.damage += dmg;
+    if (src && src.player && src.player.index !== undefined) { // per player (their spirits and shadows count for them), and per ability
+      const i = src.player.index, pd = this.runStats.pd || (this.runStats.pd = [0, 0]); pd[i] = (pd[i] || 0) + dmg;
+      const pa = this.runStats.pa || (this.runStats.pa = [{}, {}]), k = damageSource(src); pa[i][k] = (pa[i][k] || 0) + dmg;
+    }
     if (src && !dot) {
       if (src.mark) { e.markT = src.mark; e.markMul = src.markMul || 1.2; }
       if (src.entangle) { // harpoon: pinned in place (bosses: slowed)
@@ -1943,3 +1947,19 @@ export class Game {
 }
 
 export { INTRO_DUR };
+
+// where a player's damage came from, for the end screen: their spirits / shadow clones, an imbuement, a talent,
+// or one of the weapon's three abilities (the one that threw the projectile, or the one under way)
+export function damageSource(src) {
+  if (src.spirit) return 'spirits';
+  if (src.ally) return 'shadows';
+  if (src.chain) return 'lightning';
+  if (src.burn) return 'burn';
+  if (src.poison) return 'poison';
+  if (src.talent) return src.talent;
+  if (src.ability) return src.ability;
+  const p = src.player;
+  if (p.waltz || p.storm || p.flurry || p.guard || p.leap) return 'special';
+  if (p.spin) return 'secondary';
+  return p.abil || 'basic';
+}

@@ -767,7 +767,8 @@ export class Player {
       ctx.restore();
       return;
     }
-    if (this.aimMode !== 'stick' || this.charge || this.dash.t > 0) return;
+    return; // (2026-11-21: no hit-area guide for attacks any more; only charging abilities show theirs, drawChargeIndicator)
+    // eslint-disable-next-line no-unreachable
     const w = this.weapons[0], def = w.def.basic;
     ctx.save();
     ctx.translate(isoX(this.x, this.y), isoY(this.x, this.y)); ctx.scale(1, 0.5); ctx.rotate(Math.PI / 4); ctx.rotate(Math.atan2(this.aimY, this.aimX));
@@ -1072,7 +1073,7 @@ export class Player {
   // ---------------- attacks ----------------
   facingAngle() { return worldDirToScreenAngle(this.aimX, this.aimY); }
   // on the joiner, attacks are only visual; the host performs the real hit
-  proj(o, w) { if (this.netClient) return; o.owner = 'player'; o.from = this; o.weapon = w; this.g.spawnProjectile(o); }
+  proj(o, w) { if (this.netClient) return; o.owner = 'player'; o.from = this; o.weapon = w; o.ability = o.ability || this.abil; this.g.spawnProjectile(o); }
 
   // bo combo: after a while without a hit it falls one level at a time
   boDecay(w, dt) {
@@ -2230,6 +2231,19 @@ export class Player {
   drawShadow(ctx) {
     drawShadow(ctx, isoX(this.x, this.y), isoY(this.x, this.y), 13 * (1 - this.z * 0.35), 0.3);
   }
+}
+
+// which ability a player's damage came from (the end screen's overview): every attempt that actually goes off
+// (its cooldown starts) marks the player's current ability; projectiles keep the one that threw them
+for (const [m, k, cdKey] of [['tryBasic', 'basic', 'cd'], ['trySecondary', 'secondary', 'ccd'], ['trySpecial', 'special', 'scd']]) {
+  const f = Player.prototype[m];
+  Player.prototype[m] = function (i, ...rest) {
+    const w = this.weapons[i], before = w ? w[cdKey] || 0 : 0, prev = this.abil;
+    this.abil = k;
+    const r = f.call(this, i, ...rest);
+    if (w && (w[cdKey] || 0) <= before && !this.charge && !this.waltz && !this.storm && !this.flurry && !this.guard && !this.spin) this.abil = prev; // (nothing went off)
+    return r;
+  };
 }
 
 // a heart over the fallen player, cracked in two: a life spent
