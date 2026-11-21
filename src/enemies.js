@@ -332,7 +332,11 @@ export class Enemy {
     const T = this.tele;
     if (!T) return;
     const k = this.state === 'windup' ? 1 - this.t / this.tDur : (T.k ?? 0.5);
+    // normal enemies' markers are a little fainter (heavies and bosses keep them at full strength)
+    const faint = !this.boss && !this.cfg.heavy;
+    if (faint) { ctx.save(); ctx.globalAlpha *= TELE_NORMAL_ALPHA; }
     drawTele(ctx, T, this.x, this.y, k, t);
+    if (faint) ctx.restore();
   }
 
   draw(ctx, t) {
@@ -538,6 +542,7 @@ function drawGensaiAura(ctx, e, sx, sy, t) {
 // with the windup, and an outline that only sharpens in the last moment before the hit.
 const TELE_A = 0.55; // overall telegraph opacity
 export const MIRAGE_W = 1.2; // Gensai's mirage dash lanes (his own dash and his clones')
+const TELE_NORMAL_ALPHA = 0.7; // (2026-11-21)
 export function drawTele(ctx, T, x, y, k, t) {
   const pulse = 0.5 + 0.5 * Math.sin(t * 20);
   const edge = `rgba(255,90,70,${(0.22 + 0.5 * k * k * k).toFixed(3)})`;
