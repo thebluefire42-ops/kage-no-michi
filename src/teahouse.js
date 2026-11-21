@@ -2,26 +2,13 @@
 // tea house (painted over the level), the hostess serves tea, and the consumable cards are offered here.
 // After the pick the team leaves through the noren and the route map comes up.
 import { TAU, clamp } from './util.js';
-import { PLAYER_COLORS } from './config.js';
+import { drawHumanoid, drawShadow } from './rig.js';
+import { PALS, weaponRig } from './cutscene.js';
+
+// the hostess: an older woman in an indigo kimono with a gold obi, hair pinned up
+const HOSTESS = { pal: { skin: '#e8c8a8', cloth: '#2a3a5a', cloth2: '#1e2a44', sash: '#c8a050', hood: '#8a8480', hair: '#9a9490', metal: '#ddd', wood: '#7a4e2a', accent: '#c8a050' }, head: 'longhair', robe: true };
 
 const SERIF = '"Shippori Mincho", serif';
-
-// a figure kneeling in seiza, seen from the front-side: robe, sash, head (and hair); x, y = the knees on the floor
-function kneeler(ctx, x, y, s, robe, sash, hair, facing, ninja) {
-  ctx.save(); ctx.translate(x, y); ctx.scale(facing * s, s);
-  ctx.fillStyle = 'rgba(0,0,0,0.22)'; ctx.beginPath(); ctx.ellipse(0, 2, 34, 7, 0, 0, TAU); ctx.fill(); // shadow
-  ctx.fillStyle = robe; // folded legs and body
-  ctx.beginPath(); ctx.moveTo(-30, 0); ctx.quadraticCurveTo(-32, -18, -16, -22); ctx.lineTo(-12, -58); ctx.quadraticCurveTo(0, -66, 12, -58); ctx.lineTo(18, -24); ctx.quadraticCurveTo(32, -16, 30, 0); ctx.closePath(); ctx.fill();
-  ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 1.5; ctx.stroke();
-  ctx.fillStyle = sash; ctx.fillRect(-13, -36, 27, 7); // obi / sash
-  ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(-6, -58); ctx.lineTo(2, -40); ctx.lineTo(9, -58); ctx.stroke(); // collar
-  ctx.fillStyle = robe; ctx.beginPath(); ctx.ellipse(6, -26, 12, 6, -0.2, 0, TAU); ctx.fill(); // hands resting on the knees
-  ctx.fillStyle = ninja ? '#1a1620' : '#e8cfae'; // head
-  ctx.beginPath(); ctx.arc(0, -72, 11, 0, TAU); ctx.fill();
-  if (ninja) { ctx.fillStyle = '#e8cfae'; ctx.fillRect(-1, -76, 11, 5); ctx.fillStyle = sash; ctx.fillRect(-11, -82, 22, 3); } // eye slit and headband
-  else { ctx.fillStyle = hair; ctx.beginPath(); ctx.arc(-2, -75, 11, Math.PI * 0.9, Math.PI * 2.05); ctx.fill(); ctx.beginPath(); ctx.arc(-6, -86, 6, 0, TAU); ctx.fill(); } // grey hair in a bun
-  ctx.restore();
-}
 
 export function drawTeaHouse(ctx, g, t) {
   const v = g.view, W = v.W, H = v.H, u = Math.min(W / 1280, H / 720);
@@ -117,8 +104,14 @@ export function drawTeaHouse(ctx, g, t) {
     ctx.beginPath(); ctx.moveTo(cx + dx * u, yy); ctx.bezierCurveTo(cx + (dx + 8) * u, yy - 8 * u, cx + (dx - 8) * u, yy - 16 * u, cx + dx * u, yy - 24 * u); ctx.stroke();
   }
   // the hostess on the far side of the table, the team on the near left
-  kneeler(ctx, cx + 200 * u, cy + 6 * u, 1.25 * u, '#2a3a5a', '#c8a050', '#9a9490', -1, false);
-  g.players.forEach((p, i) => kneeler(ctx, cx - (200 + i * 90) * u, cy + (10 + i * 8) * u, 1.25 * u, '#24202a', PLAYER_COLORS[i] || '#c8302e', null, 1, true));
+  // the same figures as in the levels and the cutscenes (the rig), kneeling at the table: the hostess across it,
+  // the team on the near left with their own colours and weapons
+  const fig = (rig, x, y, facing, seed) => {
+    drawShadow(ctx, x, y, 34 * u, 0.28);
+    drawHumanoid(ctx, { ...rig, x, y, z: 0, facing, time: t + seed, walk: 0, move: 0, s: 2.4 * u, pose: { kind: 'kneel', t: 0.05 }, flash: 0, alpha: 1, seed });
+  };
+  fig(HOSTESS, cx + 210 * u, cy + 8 * u, Math.PI, 5);
+  g.players.forEach((p, i) => fig({ pal: PALS[i] || PALS[0], head: 'hood', scarf: true, ...weaponRig(p) }, cx - (210 + i * 100) * u, cy + (12 + i * 10) * u, 0, i + 1));
   // vignette
   const vg = ctx.createRadialGradient(W / 2, H * 0.55, Math.min(W, H) * 0.35, W / 2, H * 0.55, Math.hypot(W, H) * 0.62);
   vg.addColorStop(0, 'rgba(20,10,4,0)'); vg.addColorStop(1, 'rgba(20,10,4,0.55)');

@@ -10,13 +10,16 @@
 const DEAD_MOVE = 0.2;
 const DEAD_AIM = 0.3;
 const TRIGGER_ON = 0.3;
-const ACTIONS = ['L1', 'L2', 'R1', 'R2', 'dash', 'pause', 'confirm', 'back', 'up', 'down', 'left', 'right', 'debug', 'select', 't1', 't2', 't3'];
+const ACTIONS = ['L1', 'L2', 'R1', 'R2', 'atk', 'sec', 'spc', 'dash', 'pause', 'confirm', 'back', 'up', 'down', 'left', 'right', 'debug', 'select', 't1', 't2', 't3', 't4', 'reroll'];
 
 const KEYMAP = {
-  L1: ['KeyQ'],
+  L1: ['KeyQ'],  // (menus: the card gallery's tabs; in play the bumpers and triggers are talents)
   L2: ['KeyE'],
   R1: ['KeyJ'],
   R2: ['KeyK'],
+  atk: [],          // basic attack: left mouse (controller X)
+  sec: [],          // secondary attack: right mouse (controller Y)
+  spc: ['KeyQ', 'KeyE'], // special (controller B)
   dash: ['Space', 'ShiftLeft', 'ShiftRight'],
   pause: ['Escape', 'KeyP'],
   confirm: ['Enter', 'Space', 'NumpadEnter'],
@@ -27,9 +30,11 @@ const KEYMAP = {
   right: ['ArrowRight', 'KeyD'],
   debug: ['F3'],
   select: ['Tab', 'KeyL'], // menus: the controller's Back / View button
-  t1: ['Digit1', 'Numpad1'], // talents (controller X / Y / B)
+  t1: ['Digit1', 'Numpad1'], // talents (controller LB / LT / RB / RT)
   t2: ['Digit2', 'Numpad2'],
   t3: ['Digit3', 'Numpad3'],
+  t4: ['Digit4', 'Numpad4'],
+  reroll: ['KeyR'], // card screens: spend a reroll token (controller Y)
 };
 
 function radial(x, y, dead) {
@@ -51,7 +56,9 @@ function readPad(gp) {
     L1: b(4), R1: b(5), L2: trig(6, 4), R2: trig(7, 5),
     dash: b(0), confirm: b(0), back: b(1), pause: b(9),
     up: b(12), down: b(13), left: b(14), right: b(15), debug: b(8), select: b(8),
-    t1: b(2), t2: b(3), t3: b(1), // X, Y, B
+    atk: b(2), sec: b(3), spc: b(1), // X, Y, B
+    t1: b(4), t2: trig(6, 4), t3: b(5), t4: trig(7, 5), // LB, LT, RB, RT
+    reroll: b(3), // Y (card screens)
   };
   const [lx, ly, lm] = radial(gp.axes[0] || 0, gp.axes[1] || 0, DEAD_MOVE);
   const [rx, ry, rm] = radial(gp.axes[2] || 0, gp.axes[3] || 0, DEAD_AIM);
@@ -164,8 +171,8 @@ export const input = {
     const k = this._keys, latch = this._latch;
     const kbDown = {};
     for (const a of ACTIONS) kbDown[a] = KEYMAP[a].some((c) => k.has(c) || latch.has(c));
-    if (this.mouse.down[0] || this._mouseLatch[0]) kbDown.R1 = true;
-    if (this.mouse.down[2] || this._mouseLatch[2]) kbDown.R2 = true;
+    if (this.mouse.down[0] || this._mouseLatch[0]) kbDown.atk = true;
+    if (this.mouse.down[2] || this._mouseLatch[2]) kbDown.sec = true;
     this.mouse.clicked = this._mouseLatch[0];
     latch.clear(); this._mouseLatch = [false, false, false];
     let kx = (kbDown.right ? 1 : 0) - (kbDown.left ? 1 : 0);

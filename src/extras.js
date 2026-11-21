@@ -5,14 +5,16 @@
 // Every move has its own cooldown (e.data.xCd) so the base attacks still make up most of the fight.
 import { TAU, rand } from './util.js';
 import { sfx } from './audio.js';
+import { laneW, ARROW_HALF } from './config.js';
 
 const slashA = (wx, wy) => Math.atan2(((wx + wy) * 16) / 0.55, (wx - wy) * 32);
 const ready = (e) => e.atkCd <= 0 && (e.data.xCd ?? (e.data.xCd = rand(2, 4.5))) <= 0;
 const used = (e, min = 5, max = 8) => { e.data.xCd = rand(min, max); };
 const ang = (dx, dy) => Math.atan2(dy, dx);
 function ringHazard(g, x, y, max, dmg, speed = 8) { g.hazards.push({ kind: 'ring', x, y, rad: 0.5, speed, max, width: 0.45, dmg, hit: false, gap: null }); }
+// reach: how far it flies (its telegraph lane is exactly that long)
 function shoot(g, e, kind, a, speed, dmg, extra = {}) {
-  g.spawnProjectile({ owner: 'enemy', kind, x: e.x, y: e.y, z: 0.7, vx: Math.cos(a) * speed, vy: Math.sin(a) * speed, dmg, r: 0.2, life: 1.6, onHit: e.cfg.onHit, ...extra });
+  g.spawnProjectile({ owner: 'enemy', src: e, kind, x: e.x, y: e.y, z: 0.7, vx: Math.cos(a) * speed, vy: Math.sin(a) * speed, dmg, r: 0.2, life: 1.6, onHit: e.cfg.onHit, ...extra });
 }
 // a delayed blast on the ground (telegraphed circle, then damage inside it)
 export function blastAt(g, x, y, r, dmg, delay, color = '170,120,255') { g.hazards.push({ kind: 'blast', x, y, r, t: delay, dur: delay, dmg, color }); }
@@ -36,21 +38,45 @@ function chainThink(e, dt, g, dx, dy, d, tele) {
   return true;
 }
 
+// a ring attack: a swirl that hits only the band between r - w/2 and r + w/2 around the enemy
+function donutThink(e, d, r, w, windup, near, far) {
+  if (!ready(e) || d < near || d > far) return false;
+  e.windup(windup, { kind: 'donut', x: e.x, y: e.y, r, w }, 'windup', 'x:donut'); used(e, 6, 9); return true;
+}
+function donutStrike(e, g, r, w, color, mul = 1) { // (mul: how much harder than the enemy's normal hit)
+  sfx.slash(); g.shake(3);
+  for (let k = 0; k < 4; k++) g.fx.slash(e.x, e.y, k * (TAU / 4) + rand(0, 0.6), r, 1.7, color, w * 22, 0.24);
+  g.fx.ring(e.x, e.y, r, color, 0.3, w * 14);
+  for (const p of g.targets) { if (!p.active) continue; const d = Math.hypot(p.x - e.x, p.y - e.y); if (Math.abs(d - r) < w / 2 && (p.z || 0) < 0.4) p.hurt(e.dmg * mul, e.x, e.y, 5); }
+}
+
+// the Ashigaru Spearman's whirl hits this much harder than his thrust (2026-11-20: 'significantly' more)
+const SPEAR_WHIRL_MUL = 1.6;
 export const EXTRA = {
+  // ================================================================ area 1
+  spear: { // whirls the spear: a narrow ring of steel 3 tiles out (step in close, or stay well back)
+    think: (e, dt, g, dx, dy, d) => donutThink(e, d, 3.0, 0.7, 0.65, 1.8, 4.3), // (windup 0.85 -> 0.65 on 2026-11-21)
+    strike: (e, g, m) => { if (m === 'donut') donutStrike(e, g, 3.0, 0.7, 'rgba(255,225,200,0.85)', SPEAR_WHIRL_MUL); },
+  },
+  // ================================================================ area 2: wind swallow (smaller ring, thicker band)
+  tsubame: {
+    think: (e, dt, g, dx, dy, d) => donutThink(e, d, 1.7, 1.1, 0.6, 0.9, 2.6),
+    strike: (e, g, m) => { if (m === 'donut') donutStrike(e, g, 1.7, 1.1, 'rgba(220,235,255,0.85)'); },
+  },
   // ================================================================ area 2: mountain pass
   kappa: { // spits a water bolt from mid range
     think: (e, dt, g, dx, dy, d) => {
       if (!ready(e) || d < 2.5 || d > 5.5) return false;
       e.data.xa = ang(dx, dy); used(e);
-      e.windup(0.5, { kind: 'line', len: 6, width: 0.25, angle: e.data.xa }, 'throw', 'x:spit'); return true;
+      e.windup(0.5, { kind: 'line', len: 10, width: laneW(0.2), angle: e.data.xa }, 'throw', 'x:spit'); return true;
     },
-    strike: (e, g) => { shoot(g, e, 'orb', e.data.xa, 9, e.dmg * 0.9); sfx.enemyShoot(); },
+    strike: (e, g) => { shoot(g, e, 'orb', e.data.xa, 9, e.dmg * 0.9, { life: 10 / 9 }); sfx.enemyShoot(); },
   },
   kitsune: { // three foxfire flames in a fan
     think: (e, dt, g, dx, dy, d) => {
       if (!ready(e) || d < 2.5 || d > 6) return false;
       e.data.xa = ang(dx, dy); used(e, 5, 7);
-      const a = e.data.xa; e.windup(0.6, { kind: 'fan', len: 6, width: 0.3, angles: [a - 0.35, a, a + 0.35] }, 'cast', 'x:foxfire'); return true;
+      const a = e.data.xa; e.windup(0.6, { kind: 'fan', len: 7.5 * 1.4, width: laneW(0.2), angles: [a - 0.35, a, a + 0.35] }, 'cast', 'x:foxfire'); return true;
     },
     strike: (e, g) => { for (const o of [-0.35, 0, 0.35]) shoot(g, e, 'fireball', e.data.xa + o, 7.5, e.dmg * 0.8, { life: 1.4 }); sfx.zap(); },
   },
@@ -72,7 +98,7 @@ export const EXTRA = {
       const p = e.target, l = Math.hypot(p.x - e.x, p.y - e.y) || 1, px = -(p.y - e.y) / l, py = (p.x - e.x) / l;
       for (const s of [-1.8, 0, 1.8]) {
         const tx = Math.max(1, Math.min(g.world.N - 1, p.x + px * s)), ty = Math.max(1, Math.min(g.world.N - 1, p.y + py * s));
-        g.spawnProjectile({ owner: 'enemy', kind: 'jug', lob: true, x: e.x, y: e.y, z: 0.9, sx: e.x, sy: e.y, tx, ty, T: 1.1, t: 0, dmg: e.dmg, r: 1.3, life: 2 });
+        g.spawnProjectile({ owner: 'enemy', src: e, kind: 'jug', lob: true, x: e.x, y: e.y, z: 0.9, sx: e.x, sy: e.y, tx, ty, T: 1.1, t: 0, dmg: e.dmg, r: 1.3, life: 2 });
         g.hazards.push({ kind: 'marker', x: tx, y: ty, r: 1.3, t: 1.1, dur: 1.1 });
       }
       sfx.throwKnife();
@@ -81,7 +107,7 @@ export const EXTRA = {
   yamabushi: { // blows the conch: a shockwave ring when you get close
     think: (e, dt, g, dx, dy, d) => {
       if (!ready(e) || d > 2.8) return false;
-      used(e, 6, 9); e.windup(0.75, { kind: 'circle', x: e.x, y: e.y, r: 3.2 }, 'cast', 'x:conch'); return true;
+      used(e, 6, 9); e.windup(0.75, { kind: 'circle', x: e.x, y: e.y, r: 3.4 + 0.45 }, 'cast', 'x:conch'); return true;
     },
     strike: (e, g) => { ringHazard(g, e.x, e.y, 3.4, e.dmg * 1.1, 7); sfx.horn(); g.shake(3); },
   },
@@ -95,17 +121,17 @@ export const EXTRA = {
     think: (e, dt, g, dx, dy, d) => {
       if (!ready(e) || d < 3 || d > 7) return false;
       e.data.xa = ang(dx, dy); used(e, 6, 9);
-      e.windup(0.6, { kind: 'line', len: 7, width: 0.18, angle: e.data.xa }, 'throw', 'x:bone'); return true;
+      e.windup(0.6, { kind: 'line', len: 12, width: laneW(0.2), angle: e.data.xa }, 'throw', 'x:bone'); return true;
     },
-    strike: (e, g) => { shoot(g, e, 'kunai', e.data.xa, 11, e.dmg * 0.8); sfx.throwKnife(); },
+    strike: (e, g) => { shoot(g, e, 'kunai', e.data.xa, 11, e.dmg * 0.8, { life: 12 / 11 }); sfx.throwKnife(); },
   },
   frostarcher: { // a volley of three ice arrows
     think: (e, dt, g, dx, dy, d) => {
       if (!ready(e) || d < 3 || d > 8) return false;
       e.data.xa = ang(dx, dy); used(e, 6, 8);
-      const a = e.data.xa; e.windup(0.85, { kind: 'fan', len: 8, width: 0.14, angles: [a - 0.22, a, a + 0.22] }, 'draw', 'x:volley'); return true;
+      const a = e.data.xa; e.windup(0.85, { kind: 'fan', len: 15, width: ARROW_HALF * 2, angles: [a - 0.22, a, a + 0.22] }, 'draw', 'x:volley'); return true;
     },
-    strike: (e, g) => { for (const o of [-0.22, 0, 0.22]) shoot(g, e, 'icearrow', e.data.xa + o, 11, e.dmg); sfx.enemyShoot(); },
+    strike: (e, g) => { for (const o of [-0.22, 0, 0.22]) shoot(g, e, 'icearrow', e.data.xa + o, 11, e.dmg, { life: 15 / 11, hitR: ARROW_HALF }); sfx.enemyShoot(); },
   },
   yukionna: { // freezing breath: a cone of cold that slows
     think: (e, dt, g, dx, dy, d) => {
@@ -154,7 +180,7 @@ export const EXTRA = {
     think: (e, dt, g, dx, dy, d) => {
       if (!ready(e) || d < 3 || d > 9) return false;
       used(e, 6, 9);
-      e.windup(1.15, { kind: 'line', len: 10, width: 0.32, angle: ang(dx, dy), track: true }, 'draw', 'x:heavybolt'); return true;
+      e.windup(1.15, { kind: 'line', len: 19, width: laneW(0.24), angle: ang(dx, dy), track: true }, 'draw', 'x:heavybolt'); return true;
     },
     strike: (e, g) => { shoot(g, e, 'bolt', ang(e.faceX, e.faceY), 19, e.dmg * 1.6, { r: 0.24, life: 1 }); sfx.shoot(); g.shake(2); },
   },
@@ -162,9 +188,9 @@ export const EXTRA = {
     think: (e, dt, g, dx, dy, d) => {
       if (!ready(e) || d < 2 || d > 5.5) return false;
       e.data.xa = ang(dx, dy); used(e, 4, 7);
-      const a = e.data.xa; e.windup(0.45, { kind: 'fan', len: 6, width: 0.14, angles: [a - 0.28, a, a + 0.28] }, 'throw', 'x:kunai'); return true;
+      const a = e.data.xa; e.windup(0.45, { kind: 'fan', len: 10, width: laneW(0.2), angles: [a - 0.28, a, a + 0.28] }, 'throw', 'x:kunai'); return true;
     },
-    strike: (e, g) => { for (const o of [-0.28, 0, 0.28]) shoot(g, e, 'kunai', e.data.xa + o, 14, e.dmg * 0.75); sfx.throwKnife(); },
+    strike: (e, g) => { for (const o of [-0.28, 0, 0.28]) shoot(g, e, 'kunai', e.data.xa + o, 14, e.dmg * 0.75, { life: 10 / 14 }); sfx.throwKnife(); },
   },
   kgmonk: { // war chant: heals hurt allies nearby
     think: (e, dt, g) => {
@@ -186,7 +212,7 @@ export const EXTRA = {
   kgwall: { // slams the shield down: a shockwave ring
     think: (e, dt, g, dx, dy, d) => {
       if (!ready(e) || d > 2.6) return false;
-      used(e, 7, 10); e.windup(0.8, { kind: 'circle', x: e.x, y: e.y, r: 3.0 }, 'windup', 'x:quake'); return true;
+      used(e, 7, 10); e.windup(0.8, { kind: 'circle', x: e.x, y: e.y, r: 3.2 + 0.45 }, 'windup', 'x:quake'); return true;
     },
     strike: (e, g) => { ringHazard(g, e.x, e.y, 3.2, e.dmg, 6.5); sfx.slam(); g.shake(5); g.particles.burst('dust', e.x, e.y, 0.05, 14, 3, 0.6, 5, '#c8b8a8', { under: true }); },
   },

@@ -1,0 +1,16 @@
+<!doctype html><html><head><meta charset="utf-8"></head><body style="margin:0;background:#222">
+<!-- Debug view of the sim: ?suite=NAME&job=ID shows six frames of that job as the game would draw them -->
+<canvas id="game" width="960" height="540" style="position:absolute;left:-5000px"></canvas><div id="o" style="display:grid;grid-template-columns:repeat(3,640px)"></div>
+<script type="module">
+const q = new URLSearchParams(location.search);
+const { input } = await import('../../src/input.js');
+const { Game } = await import('../../src/game.js');
+const { runSim } = await import('./harness.js');
+const { buildSuite } = await import('./suites.js');
+const canvas = document.getElementById('game'); input.init(canvas);
+const g = new Game(canvas);
+const job = buildSuite(q.get('suite') || 'smoke')[+(q.get('job') || 0)];
+const at = [1, 2.2, 2.6, 3, 5.1, 9].map((s) => Math.round(s * 60));
+const res = runSim(g, job, { onStep: (i) => { if (at.includes(i)) { g.fade = 0; g.fadeDir = 0; g.render(); const im = new Image(); im.width = 640; im.src = canvas.toDataURL(); document.getElementById('o').append(im); } } });
+const p = document.createElement('pre'); p.style.color = '#fff'; p.textContent = JSON.stringify(job) + '\n' + JSON.stringify(res); document.body.append(p);
+</script></body></html>

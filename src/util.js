@@ -19,6 +19,7 @@ export const ease = {
   inCubic: (t) => t * t * t,
   inOutSine: (t) => -(Math.cos(Math.PI * t) - 1) / 2,
   outQuad: (t) => 1 - (1 - t) * (1 - t),
+  outExpo: (t) => (t >= 1 ? 1 : 1 - Math.pow(2, -10 * t)), // (a snap: almost all of the way at once)
   inQuad: (t) => t * t,
   outBack: (t) => { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2); },
   outElastic: (t) => (t === 0 ? 0 : t === 1 ? 1 : Math.pow(2, -10 * t) * Math.sin((t * 10 - 0.75) * (TAU / 3)) + 1),

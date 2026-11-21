@@ -1,13 +1,14 @@
 // Game orchestration: states, level flow, spawning, combat glue, camera and rendering.
 import { TAU, clamp, lerp, rand, pick, ease, isoX, isoY, screenToWorld, dist, angDiff } from './util.js';
-import { ADMIN_DAMAGE, ENEMIES, BOSSES, BIOME_POOLS, levelBudget, PLAYER_BASE, COOP_BOSS_HP, COOP_ENEMY_COUNT, ELEMENTS, ELEMENT_RULES, HEAVY_WEIGHT, heavyCap, shieldCapFor, SHIELD_WEIGHT, SPAWN_REPEAT, SPAWN_GUARANTEE, SHIELD, DROPS, MUSIC_TENSE, SPAWN_PACING, chainDamageFor, DIFFICULTY, DOJO_POOL, LIBRARY_POOL, LIBRARY_WISE_WEIGHT } from './config.js';
+import { LIBRARY_COUNT, ADMIN_DAMAGE, ENEMIES, BOSSES, BIOME_POOLS, EARLY_ARCHER, ARCHER_WEIGHT, WAVES, OPEN_STRIKE_HP, levelBudget, PLAYER_BASE, COOP_BOSS_HP, COOP_ENEMY_COUNT, ELEMENTS, ELEMENT_RULES, HEAVY_WEIGHT, heavyCap, shieldCapFor, SHIELD_WEIGHT, SPAWN_REPEAT, SPAWN_GUARANTEE, EARLY_TOUGH, SHIELD, DROPS, MUSIC_TENSE, SPAWN_PACING, chainDamageFor, DIFFICULTY, DOJO_POOL, LIBRARY_POOL, LIBRARY_WISE_WEIGHT, POISON_GROUP } from './config.js';
 import { World } from './world.js';
 import { Player } from './player.js';
 import { Enemy, updateProjectiles, updateHazards, drawHazards, drawProjectiles, drawProjectileShadows } from './enemies.js';
 import { Particles, Decals, Effects } from './particles.js';
-import { CardScreen, rollReward, applyUpgrade, drawIcon } from './cards.js';
-import { RouteScreen, makeAreaMap, rewardOf, areaOf, AREAS, nodeOf, decorateNode } from './route.js';
-import { ARTS } from './arts.js';
+import { CardScreen, rollReward, applyUpgrade, drawIcon, ownedCards, removeCard, rewardTypeOf, atRarity } from './cards.js';
+import { RouteScreen, makeAreaMap, rewardOf, areaOf, AREAS, nodeOf, decorateNode, ensureKids, takePath, shiftWeights, smuggle } from './route.js';
+import { ARTS, artOptions } from './arts.js';
+import { applyEquipment } from './equipment.js';
 import { tryFinisher } from './finishers.js';
 import { uiScale, text as uiText } from './ui.js';
 import { Overlay, drawHUD, drawBanners, drawDebug, drawBossIntro, drawTenseOverlay, drawCinemaBars } from './ui.js';
@@ -17,16 +18,20 @@ import { sfx, music } from './audio.js';
 import { net } from './net.js';
 import { OnlineHost, OnlineClient, smoothPuppets } from './online.js';
 import { updateAllies } from './talents.js';
+import { updateSpirits, placeSpirits, drawSpiritFx, rememberFallen, tetherOnDeath } from './spirits.js';
 import { Nav } from './nav.js';
-import { Monk, rollSacrificeHands, takeSacrifice, SACRIFICES } from './sacrifice.js';
+import { Monk, rollSacrificeHands, takeSacrifice, applySacrifice, SACRIFICES } from './sacrifice.js';
 import { Dialogue } from './dialogue.js';
 import { storyLines } from './story.js';
 import { recordPick } from './cards.js';
 import { IntroCutscene } from './cutscene.js';
 import { Area2Cutscene } from './cutscene2.js';
+import { Area4Cutscene } from './cutscene4.js';
 import { drawTeaHouse } from './teahouse.js';
-const CUTSCENES = { intro: IntroCutscene, area2: Area2Cutscene };
-const AREA2_SONG_SWITCH = 150; // seconds into the area 2 cutscene song (2:30) where it hands over to the tense song
+import { SHADOW } from './rig.js';
+import { rollCorruption, startCorruption, updateCorruption, drawCorruptionGround, drawCorruptionOver, drawCorruptionScreen, CORRUPT_INFO } from './corruption.js';
+const AREA_SONGS = ['biome_1', 'biome_2', 'biome_3', 'biome_4'];
+const CUTSCENES = { intro: IntroCutscene, area2: Area2Cutscene, area4: Area4Cutscene };
 
 export const FINAL_LEVEL = 33;
 // level -> biome: 1-10 spring, 11-20 autumn, 21-30 winter, 31+ the Kagerō fortress
@@ -34,15 +39,22 @@ export const biomeOf = (n) => (n > 30 ? 3 : Math.floor((n - 1) / 10));
 
 const INTRO_DUR = 4.8;
 const HITSTOP_GAP = 0.35; // (see Game.hitstop)
+const HITSTOP_BUDGET = 0.05, HITSTOP_WINDOW = 1.0; // at most 0.05 s of ordinary hit-stop per second
 // low health tension: eases off after this many seconds without a hit, down to this share of itself
 const LOW_CALM_AFTER = 4, LOW_CALM_FADE = 3, LOW_CALM_MIN = 0.3;
 // route reward -> the level's arena (other rewards use the area's ordinary map)
 // network messages handled only during an online run (cleared when the pair goes back to the weapon select)
-const RUN_MESSAGES = ['pause', 'in', 'atk', 'tal', 'pick', 'sacpick', 'dlgnext', 'snap', 'level', 'cards', 'sac', 'route', 'cut', 'dlg', 'dlgend', 'phurt', 'pchill', 'pstun', 'disconnect', 'lobby'];
+const RUN_MESSAGES = ['reroll', 'pdashcut', 'choose', 'chosen', 'picked', 'pause', 'in', 'atk', 'tal', 'pick', 'sacpick', 'dlgnext', 'snap', 'level', 'cards', 'sac', 'route', 'cut', 'dlg', 'dlgend', 'phurt', 'pchill', 'pstun', 'disconnect', 'lobby'];
 const LEVEL_KIND = { stat: 'town', sacrifice: 'temple', art: 'dojo', talent: 'library', element: 'shrine', training: 'training' };
+// the area 1 enemies that hide in bushes
+const COVER_SNEAKY = ['assassin', 'bandit', 'archer', 'bomber'];
 const KIND_BANNER = { shrine: { title: 'Imbuement Shrine', kanji: '宿' }, town: { kanji: '町' }, temple: { kanji: '寺' }, dojo: { title: 'Training Hall', kanji: '道場' }, library: { kanji: '書庫' } };
 
-class Spawner {
+const AMBUSH_LEVEL = 31, AMBUSH_WAIT = 4.5, AMBUSH_ALARM = 3; // the fortress's first level: quiet for 4.5 s, the player remarks on it, 3 s later the alarm and the first wave
+const WAVE_MAX = 18; // the most enemies one wave brings (before the extra wave splits them further)
+const FIRST_WAVE = 9; // the fewest enemies the first wave brings (when the level has that many)
+const MIN_FIGHT = 6;  // a new wave comes in once fewer than this are left
+export class Spawner {
   constructor(g, level) {
     this.g = g; this.level = level; this.t = 0; this.waves = []; this.pending = []; this.waveIdx = 0; this.lastWaveT = 0; this.lastWaveCount = 0;
     if (BOSSES[level]) { this.boss = BOSSES[level]; this.bossDone = false; return; }
@@ -52,28 +64,36 @@ class Spawner {
     let pool = BIOME_POOLS[biome].filter((t) => ENEMIES[t].minLevel <= level);
     if (kind === 'dojo') pool = DOJO_POOL.slice();
     else if (kind === 'library') pool = [...pool, ...LIBRARY_POOL];
-    let budget = levelBudget(level) * (g.players.length > 1 ? COOP_ENEMY_COUNT : 1) * D.count;
+    let budget = levelBudget(level) * (g.players.length > 1 ? COOP_ENEMY_COUNT : 1) * D.count * (kind === 'library' ? LIBRARY_COUNT : 1);
     const list = [];
     // heavies and shield-bearers each have their own cap that grows through the area, every one already picked
     // makes the next of its kind less likely, and once the area is under way each level gets at least one of
     // each, so they come steadily instead of none for several levels and then a crowd
     const coop = g.players.length > 1, local = ((level - 1) % 10) + 1;
     const cap = Math.max(0, heavyCap(level, coop) + D.heavyCap);
-    const shieldCap = Math.max(0, shieldCapFor(level, coop) + D.heavyCap);
-    const cat = (t) => ENEMIES[t].heavy ? 'heavy' : ENEMIES[t].shield ? 'shield' : 'normal';
-    const n = { heavy: 0, shield: 0, normal: 0 }, capOf = { heavy: cap, shield: shieldCap, normal: Infinity };
+    const shieldCap = Math.max(0, shieldCapFor(level, coop) + (D.shieldCap ?? D.heavyCap));
+    const cat = (t) => ENEMIES[t].heavy ? 'heavy' : ENEMIES[t].shield ? 'shield' : ENEMIES[t].support ? 'support' : 'normal';
+    const n = { heavy: 0, shield: 0, support: 0, normal: 0 }, capOf = { heavy: cap, shield: shieldCap, support: 1, normal: Infinity };
     const pickFrom = (types) => {
-      const weights = types.map((t) => (t === 'bandit' || t === 'karateka' ? 1.6 : 1) * (level - ENEMIES[t].minLevel < 3 ? 0.6 : 1) * (ENEMIES[t].heavy ? HEAVY_WEIGHT * D.heavyW : 1) * (ENEMIES[t].shield ? SHIELD_WEIGHT : 1) * (cat(t) === 'normal' ? 1 : SPAWN_REPEAT ** n[cat(t)]) * (LIBRARY_POOL.includes(t) && kind === 'library' ? LIBRARY_WISE_WEIGHT : 1));
+      const weights = types.map((t) => (t === 'bandit' || t === 'karateka' ? 1.6 : 1) * (t === 'archer' && level <= EARLY_ARCHER.until ? EARLY_ARCHER.mul : level - ENEMIES[t].minLevel < 3 ? 0.6 : 1) * (t === 'archer' || t === 'frostarcher' ? ARCHER_WEIGHT[biome] : 1) * (cat(t) !== 'normal' && local <= 4 ? EARLY_TOUGH : 1) * (ENEMIES[t].heavy ? HEAVY_WEIGHT * D.heavyW : 1) * (ENEMIES[t].shield ? SHIELD_WEIGHT * (D.shieldW ?? 1) : 1) * (cat(t) === 'normal' ? 1 : SPAWN_REPEAT ** n[cat(t)]) * (LIBRARY_POOL.includes(t) && kind === 'library' ? LIBRARY_WISE_WEIGHT : 1));
       let r = Math.random() * weights.reduce((a, b) => a + b, 0);
       for (let i = 0; i < types.length; i++) { r -= weights[i]; if (r <= 0) return types[i]; }
       return types[0];
     };
-    while (budget > 0.5) {
-      const affordable = pool.filter((t) => ENEMIES[t].cost <= budget && n[cat(t)] < capOf[cat(t)]);
-      if (!affordable.length) break;
-      const type = pickFrom(affordable);
-      list.push(type); budget -= ENEMIES[type].cost; n[cat(type)]++;
-    }
+    const fill = () => {
+      while (budget > 0.5) {
+        const affordable = pool.filter((t) => ENEMIES[t].cost <= budget && n[cat(t)] < capOf[cat(t)]);
+        if (!affordable.length) break;
+        const type = pickFrom(affordable);
+        list.push(type); budget -= ENEMIES[type].cost; n[cat(type)]++;
+      }
+    };
+    const budget0 = budget; fill();
+    // one more wave than the pacing gives (WAVES): top the budget up so every wave is ~perWave as big as it was
+    const P = SPAWN_PACING[biome];
+    const baseWaves = (len) => Math.max(1, Math.min(local <= 2 ? 2 : P.waves, Math.floor(len / 4) || 1), Math.ceil(len / WAVE_MAX));
+    const nW0 = baseWaves(list.length);
+    budget += budget0 * ((nW0 + WAVES.extra) / nW0 * WAVES.perWave - 1); fill();
     // the guarantee: swap a plain enemy for a shield-bearer / a heavy when the level rolled none
     for (const [c, from] of [['shield', SPAWN_GUARANTEE.shield], ['heavy', SPAWN_GUARANTEE.heavy]]) {
       const opts = pool.filter((t) => cat(t) === c);
@@ -81,11 +101,18 @@ class Spawner {
       if (kind !== 'dojo' && local >= from && n[c] === 0 && capOf[c] > 0 && opts.length && swap >= 0) { list[swap] = pickFrom(opts); n[c]++; }
     }
     for (let i = list.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [list[i], list[j]] = [list[j], list[i]]; }
-    // later areas: many smaller waves that trickle in, instead of a third of the level at once
-    const P = SPAWN_PACING[biome];
-    const nW = level < 3 ? Math.min(2, P.waves) : level >= 11 && level <= 13 ? P.waves + 1 : P.waves;
+    // a few big waves, never a trickle: the tough ones (heavies, shield-bearers, then the costlier normals) are
+    // dealt out first, one per wave in turn, so every wave has its share of them; the rest fill the waves up
+    const nW = nW0 + WAVES.extra;
     this.stagger = P.stagger; this.waveTimeout = P.timeout;
-    for (let w = 0; w < nW; w++) this.waves.push(list.filter((_, i) => i % nW === w));
+    const rank = (t) => (cat(t) === 'heavy' ? 3 : cat(t) === 'shield' ? 2 : ENEMIES[t].cost >= 2 ? 1 : 0);
+    const sorted = list.slice().sort((a, b) => rank(b) - rank(a));
+    for (let w = 0; w < nW; w++) this.waves.push([]);
+    sorted.forEach((t, i) => this.waves[i % nW].push(t));
+    // the first wave is a proper fight: at least FIRST_WAVE enemies (taken from the later waves)
+    for (let w = this.waves.length - 1; w > 0 && this.waves[0].length < FIRST_WAVE; w--) while (this.waves[w].length > 1 && this.waves[0].length < FIRST_WAVE) this.waves[0].push(this.waves[w].pop());
+    this.waves = this.waves.filter((W) => W.length);
+    for (const W of this.waves) for (let i = W.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [W[i], W[j]] = [W[j], W[i]]; }
   }
   remaining() {
     if (this.boss) return this.bossDone ? 0 : 1;
@@ -95,7 +122,8 @@ class Spawner {
   }
   get done() { return this.boss ? this.bossDone : this.waveIdx >= this.waves.length && this.pending.length === 0; }
   update(dt) {
-    const g = this.g; this.t += dt;
+    const g = this.g; if ((g.holdSpawns || g.ambushHold) && !this.boss) return; // (a Weapon Artist is choosing their technique / the level 31 ambush hasn't sprung yet)
+    this.t += dt;
     if (this.boss) {
       if (!this.bossDone && this.t > 0.5) { this.bossDone = true; g.startBossIntro(this.boss); }
       return;
@@ -103,7 +131,9 @@ class Spawner {
     const alive = g.enemies.filter((e) => !e.dead).length;
     if (this.waveIdx < this.waves.length) {
       const first = this.waveIdx === 0;
-      const trigger = first ? this.t > 0.8 : (alive <= Math.max(1, Math.floor(this.lastWaveCount * 0.35)) || this.t - this.lastWaveT > (this.waveTimeout || 14)) && this.pending.length === 0;
+      // the next wave comes once fewer than MIN_FIGHT are left standing (or after a while anyway), so you are
+      // rarely fighting fewer than about five
+      const trigger = first ? this.t > 0.8 : (alive < MIN_FIGHT || alive <= Math.floor(this.lastWaveCount * 0.25) || this.t - this.lastWaveT > (this.waveTimeout || 14)) && this.pending.length === 0;
       if (trigger) {
         const wave = this.waves[this.waveIdx++];
         wave.forEach((type, i) => this.pending.push({ type, t: i * (this.stagger || 0.22) }));
@@ -132,6 +162,8 @@ export class Game {
     this.players = [];
     this.enemies = []; this.projectiles = []; this.hazards = []; this.timers = []; this.banners = [];
     this.allies = []; this.warpT = 0; this.warpScale = 1; this.pickups = [];
+    this.spirits = []; this.fallen = []; // spirit orb: allies kept between levels, the last enemies slain
+    this.burns = []; // burn imbuement: fires on the ground
     this.cam = { x: 0, y: 0, zoom: 1 }; this.shakeAmt = 0; this.shakeX = 0; this.shakeY = 0;
     this.hitstopT = 0; this.slowT = 0; this.slowScale = 1;
     this.time = 0; this.realTime = 0;
@@ -139,7 +171,7 @@ export class Game {
     this.fade = 0; this.fadeDir = 0;
     this.fps = 60; this.frameMs = 16; this.debug = false;
     const q = new URLSearchParams(location.search);
-    this.params = { level: clamp(parseInt(q.get('level') || '1', 10) || 1, 1, 33), god: q.get('god') === '1', weapons: q.get('weapons'), monk: q.get('monk') === '1' };
+    this.params = { level: clamp(parseInt(q.get('level') || '1', 10) || 1, 1, 33), god: q.get('god') === '1', weapons: q.get('weapons'), equip: q.get('equip'), monk: q.get('monk') === '1' };
     this.god = this.params.god;
     try { this.best = parseInt(localStorage.getItem('kage.best') || '0', 10) || 0; } catch (e) { this.best = 0; }
     this.menu = new Menu(this); this.cards = new CardScreen(this); this.overlay = new Overlay(this); this.routeScreen = new RouteScreen(this);
@@ -152,10 +184,10 @@ export class Game {
     // invite link: ?join=KEY goes straight to joining that game
     const joinKey = q.get('join');
     if (joinKey) { this.menu.mode = 'join'; this.menu.startJoin(joinKey); history.replaceState(null, '', location.pathname); }
-    // test shortcut: ?weapons=katanas,knives  or co-op: ?weapons=katanas,knives;heavy,crossbow
+    // test shortcut: ?weapons=katanas  or co-op: ?weapons=katanas;heavy (one weapon each)
     else if (this.params.weapons) {
       const sets = this.params.weapons.split(';').map((s) => s.split(','));
-      if (sets.every((s) => s.length === 2)) this.startRun(sets);
+      if (sets.every((s) => s.length >= 1 && s[0])) this.startRun(sets.map((s) => s.slice(0, 1)), null, null, (this.params.equip || '').split(';'));
     }
   }
 
@@ -196,12 +228,13 @@ export class Game {
 
   // keepNet: an online pair going back to the weapon select together keeps its connection
   toTitle(keepNet = false) {
+    this.corrupt = null; this.holyWater = 0; this.forceCorrupt = false; this.lastCorrupt = null; SHADOW.off = false;
     this.state = 'title'; this.paused = false; this.hostPaused = false;
     this.training = false; this.trainingStats = null;
     if (this.online && !keepNet) net.close();
     this.online = null; this.role = 'solo';
     this.menu.reset();
-    this.players = []; this.level = 1; input.coop = false;
+    this.players = []; this.level = 1; input.coop = false; this.spirits = []; this.fallen = [];
     this.enemies = []; this.projectiles = []; this.hazards = []; this.banners = []; this.timers = [];
     this.world = new World(1, Math.floor(Math.random() * 3), Math.floor(Math.random() * 1e9));
     this.world.buildGround(this.groundScale());
@@ -226,7 +259,8 @@ export class Game {
   // ninja (weapons, cards, imbuements, talents, sacrifices); it sends the run and the current level, and its
   // snapshots fill in our stats from then on
   rejoinRun(m) {
-    this.startRun(m.sets, 'client');
+    this.startRun(m.sets, 'client', null, m.equips || []);
+    this.martialPending = false;
     this.runStart = m.runStart || 1;
     if (m.route) this.route = m.route;
     if (m.rs) this.runStats = m.rs;
@@ -237,11 +271,16 @@ export class Game {
 
   // weaponSets: [[w1, w2]] for solo, [[w1, w2], [w3, w4]] for co-op
   // role: 'solo' | 'local' (same screen) | 'host' / 'client' (online)
-  startRun(weaponSets, role = null, startLevel = null) {
+  // equips: each player's equipment set key (equipment.js), default when missing
+  startRun(weaponSets, role = null, startLevel = null, equips = []) {
+    this.holyWater = 0; // Holy Water: levels left without corruption
+    this.forceCorrupt = false; this.lastCorrupt = null; // the map's corrupt button; the last corruption seen
     if (typeof weaponSets[0] === 'string') weaponSets = [weaponSets];
     this.role = role || (weaponSets.length > 1 ? 'local' : 'solo');
     input.coop = this.role === 'local';
     this.players = weaponSets.map((ws, i) => new Player(this, ws, i));
+    this.players.forEach((p, i) => applyEquipment(p, equips[i]));
+    this.martialPending = this.role !== 'client' && this.players.some((p) => p.equip === 'martial'); this.holdSpawns = false;
     if (this.role === 'host') { this.players[1].remote = true; this.online = new OnlineHost(this); }
     if (this.role === 'client') {
       const me = this.players[1];
@@ -250,17 +289,20 @@ export class Game {
       this.online = new OnlineClient(this);
     }
     this.runStats = { kills: 0, time: 0, damage: 0, upgrades: 0 };
+    this.spirits = []; this.fallen = []; this.soulTrails = [];
     this.routeNext = 0; this.routeScreen.active = false;
     this.state = 'play';
     this.monkVisited = new Set(); this.monkActive = false; // per run (a new run meets every monk again)
-    this.area2Chill = false; this.skipAreaIntro = 0;
+    this.skipAreaIntro = 0;
+    this.routeW = { sacrifice: 1, art: 1 }; this.smuggle = -1; // route odds that shift with your choices; Smuggler's Map
     const first = startLevel || this.params.level;
     this.runStart = first;
     if (first > 1) for (const p of this.players) p.adminMul = ADMIN_DAMAGE; // admin mode: starting at a chosen level
-    this.route = makeAreaMap(areaOf(first));
+    this.route = makeAreaMap(areaOf(first), undefined, this.routeW);
     { const c = first - this.route.first; if (c > 0) { this.route.cols[c].nodes = [decorateNode({ r: 'stat', y: 0.5 }, areaOf(first))]; } this.route.path[c] = 0; }
     if (this.role !== 'client' && first === 1) this.playIntro();
     else if (this.role !== 'client' && first === 11) this.playArea2();
+    else if (this.role !== 'client' && first === 31) this.playArea4();
     else if (this.role !== 'client') this.loadLevel(first);
     else { this.state = 'transition'; this.fade = 1; } // wait for the host's first level
   }
@@ -277,8 +319,9 @@ export class Game {
       if (A) w.arts = { ...(w.arts || {}), [A.slot]: key };
     }
     this.runStats = { kills: 0, time: 0, damage: 0, upgrades: 0 };
+    this.spirits = []; this.fallen = []; this.soulTrails = [];
     this.routeNext = 0; this.routeScreen.active = false;
-    this.state = 'play'; this.monkVisited = new Set(); this.monkActive = false; this.area2Chill = false;
+    this.state = 'play'; this.monkVisited = new Set(); this.monkActive = false;
     this.training = true; this.trainingStats = { log: [], total: 0 };
     this.runStart = 0; this.route = null; this.skipAreaIntro = 2; // (no story lines, no best-level record)
     this.loadLevel(2, undefined, { r: 'training', d: 1, q: 0 });
@@ -306,11 +349,16 @@ export class Game {
 
   // info: the route node of this level (sent by the host online; otherwise read from the route)
   loadLevel(n, seed = Math.floor(Math.random() * 1e9), info = null) {
+    this.burns = []; this.cutBits = []; this.ambushHold = false; // (no fires, cut arrows or held ambush carry over)
     this.level = n; this.levelSeed = seed; // (the seed lets a rejoining partner build the same level)
     const bi = biomeOf(n);
     if (this.role === 'client') { this.state = 'play'; this.cards.active = false; this.cutscene = null; this.dialogue = null; }
     const node = info || (BOSSES[n] ? null : nodeOf(this.route, n));
-    this.levelInfo = node ? { r: node.r, d: node.d ?? 1, q: node.q ?? 0, name: node.name || null, monk: node.monk ?? null, monkName: node.monkName || null } : { r: 'stat', d: 1, q: 0 };
+    this.levelInfo = node ? { r: node.r, d: node.d ?? 1, q: node.q ?? 0, name: node.name || null, monk: node.monk ?? null, monkName: node.monkName || null, corrupt: node.corrupt || null, purified: !!node.purified } : { r: 'stat', d: 1, q: 0 };
+    { // testing: ?corrupt=mist|storm|bloodmoon corrupts every fight level
+      const qc = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('corrupt') : null;
+      if (qc && CORRUPT_INFO[qc] && !BOSSES[n] && this.levelInfo.r !== 'training' && this.levelInfo.r !== 'item') this.levelInfo.corrupt = qc;
+    }
     // towns, temples, training halls and libraries each have their own arena
     const kind = BOSSES[n] ? null : LEVEL_KIND[this.levelInfo.r] || null;
     this.world = new World(n, bi, seed, { hall: !!(BOSSES[n] && BOSSES[n].hall), kind });
@@ -326,7 +374,11 @@ export class Game {
     this.restStop = !BOSSES[n] && this.levelInfo.r === 'item';
     this.teaHouse = this.restStop ? { start: this.realTime } : null;
     this.players.forEach((p, i) => p.resetForLevel(this.world.spawn.x + i * 0.9, this.world.spawn.y - i * 0.9));
+    placeSpirits(this); // the spirit orb's spirits follow you into the next level
     this.spawner = new Spawner(this, n);
+    startCorruption(this);
+    // Holy Water wears off one level at a time (not in training)
+    if (this.role !== 'client' && this.levelInfo.r !== 'training' && this.holyWater > 0) this.holyWater--;
     if (this.restStop) this.spawner.waves = [];
     if (this.world.kind === 'training') { // only the dummy, and the way out is open from the start
       this.spawner.waves = [];
@@ -345,8 +397,13 @@ export class Game {
       else if (n % 10 === 1 || n === this.runStart) this.banner({ title: b.name, sub: `Level ${n} · ${KB ? (KB.title || this.levelInfo.name) + ' · ' : ''}${diff}`, kanji: b.jp.slice(0, 2), dur: 2.8 });
       else if (KB) this.banner({ title: KB.title || this.levelInfo.name || b.name, sub: `Level ${n} · ${diff}`, kanji: KB.kanji, dur: 2.4 });
       else this.banner({ title: `Level ${n}`, sub: `${b.name} · ${diff}`, dur: 2 });
-      if (this.role !== 'client' && this.skipAreaIntro !== n) this.later(0.6, () => { if (this.state === 'play' && this.level === n && !this.cleared) this.say(`level${n}`); });
+      if (this.role !== 'client' && this.skipAreaIntro !== n && n !== AMBUSH_LEVEL) this.later(0.6, () => { if (this.state === 'play' && this.level === n && !this.cleared) this.say(`level${n}`); });
+      if (this.role !== 'client' && n === AMBUSH_LEVEL) this.startAmbush(n);
     }
+    if (this.levelInfo.corrupt) { // a corrupted level says so, right after its own banner
+      const CI = CORRUPT_INFO[this.levelInfo.corrupt];
+      this.later(2.4, () => { if (this.level === n) { this.banner({ title: `Corrupted · ${CI.name}`, sub: CI.sub, kanji: CI.jp, dur: 2.8, color: 'rgba(52,8,28,0.88)' }); sfx.bossRoar(); } });
+    } else if (this.levelInfo.purified) this.later(2.4, () => { if (this.level === n) this.banner({ title: 'Purified', sub: 'The holy water keeps the corruption away', kanji: '聖', dur: 2.6 }); });
     this.fade = 1; this.fadeDir = -1;
     if (this.role === 'host') this.online.levelLoaded(n, seed, this.levelInfo);
     // first level of an area: its boss steps out of the gate and says a word before the fight starts
@@ -358,11 +415,12 @@ export class Game {
 
   onLevelCleared() {
     this.cleared = true;
+    for (const p of this.players) if (p.stats.levelDmg) p.levelBonus = (p.levelBonus || 0) + p.stats.levelDmg; // Seasoned: damage for every level completed
     if (this.restStop) { this.offerBlessings(2.2); return; } // a rest: no gong, no 'Level Cleared'
     sfx.gong();
     this.slow(1.8, 0.25);
     // clearing the level picks up anyone who is down
-    for (const p of this.players) if (p.downed) { p.downed = false; p.hp = PLAYER_BASE.reviveHp; p.iframes = 2; this.fx.ring(p.x, p.y, 1.6, 'rgba(140,255,170,0.9)', 0.6, 5); }
+    for (const p of this.players) if (p.downed && !p.relife) { p.downed = false; p.hp = PLAYER_BASE.reviveHp; p.iframes = 2; this.fx.ring(p.x, p.y, 1.6, 'rgba(140,255,170,0.9)', 0.6, 5); }
     const heal = PLAYER_BASE.clearHeal;
     if (heal > 0) for (const p of this.alivePlayers()) { p.heal(heal); this.fx.text(p.x, p.y, `+${heal}`, '#7dff9a', 18); }
     const boss = BOSSES[this.level];
@@ -401,15 +459,17 @@ export class Game {
         if (this.state !== 'play' || !this.alivePlayers().length) return;
         this.pendingPicks = new Set([0]);
         const rp = this.players[1];
-        if (net.connected && !rp.disconnected) { this.pendingPicks.add(1); this.remoteCards = rollUpgrades(rp); this.online.sendCards(this.remoteCards); }
+        if (net.connected && !rp.disconnected) { this.pendingPicks.add(1); this.remoteReroll = () => rollUpgrades(rp); this.remoteCards = rollUpgrades(rp); this.online.sendCards(this.remoteCards); }
         const p = this.players[0];
         this.state = 'cards';
         this.cards.open(rollUpgrades(p), (card) => {
           applyUpgrade(p, card); this.runStats.upgrades++;
-          this.state = 'play'; this.pendingPicks.delete(0);
-          if (this.pendingPicks.size) this.banner({ title: 'Waiting for Player 2…', dur: 2, y: 0.25, size: 24 });
-          this.checkPicksDone();
-        }, p);
+          this.afterCard(p, card, () => {
+            this.state = 'play'; this.pendingPicks.delete(0);
+            if (this.pendingPicks.size) this.banner({ title: 'Waiting for Player 2…', dur: 2, y: 0.25, size: 24 });
+            this.checkPicksDone();
+          });
+        }, p, { reroll: () => rollUpgrades(p) });
       });
       return;
     }
@@ -418,26 +478,21 @@ export class Game {
       if (i >= this.players.length) { this.afterPicks(); return; }
       const p = this.players[i];
       this.state = 'cards';
-      this.cards.open(rollUpgrades(p), (card) => { applyUpgrade(p, card); this.runStats.upgrades++; pickFor(i + 1); }, p);
+      this.cards.open(rollUpgrades(p), (card) => { applyUpgrade(p, card); this.runStats.upgrades++; this.afterCard(p, card, () => pickFor(i + 1)); }, p, { reroll: () => rollUpgrades(p) });
     };
     this.later(delay, () => { if (this.state === 'play' && this.alivePlayers().length) pickFor(0); });
   }
 
   // ---------------------------------------------------------------- music
-  // Menu music on the title and weapon select; the opening cutscene already plays area 1's song, which
-  // carries straight on into level 1. During a run: the area's song (the tense versions only).
-  // Blessing / sacrifice cards and dialogue muffle it (low-pass) without stopping it.
-  // Each area's song has a chill and a tense version (the fortress uses area 3's song).
+  // Menu music on the title and weapon select. During a run each area plays one mixed song (biome_1..4),
+  // started by the area's opening scene (intro cutscene, area 2 cutscene, the level 21 / 31 boss previews)
+  // and carrying on through the whole area. Cards and dialogue muffle it (low-pass) without stopping it.
   updateMusic() {
-    if (this.state === 'cutscene') { music.set((this.cutscene && this.cutscene.song) || 'biome_1_tense'); music.muffle(false); return; }
+    if (this.state === 'cutscene') { music.set((this.cutscene && this.cutscene.song) || 'biome_1'); music.muffle(false); return; }
     const menu = this.state === 'title' || !this.inRun || !this.world;
     this.musicTense(); // still drives the tense screen effect during fights
-    let song = menu ? 'main_menu' : `biome_${Math.min(2, this.world.bi) + 1}_tense`; // the area's (tense) song
-    // the area 2 cutscene's song plays on into the area until 2:30, then crossfades into the tense song
-    if (this.area2Chill) {
-      if (!menu && this.world.bi === 1 && music.timeOf('biome_2_chill') < AREA2_SONG_SWITCH) song = 'biome_2_chill';
-      else this.area2Chill = false;
-    }
+    // the area's song (biome_1..4)
+    let song = menu ? 'main_menu' : AREA_SONGS[Math.min(3, this.world.bi)];
     music.set(song);
     // the filter: heavy for cards / dialogue / the map, the highs cut while paused, and closing in as health runs low
     let hz = null;
@@ -561,8 +616,23 @@ export class Game {
   }
 
   // the walk into Momiji Pass, then level 11 (its song keeps playing into the level)
+  // the road from Yukishiro to the fortress and in by the old water gate, then level 31 (its song plays on)
+  playArea4() {
+    this.state = 'cutscene'; this.fade = 0; this.fadeDir = 0;
+    this.cutscene = new Area4Cutscene(this, () => {
+      this.cutscene = null; this.state = 'play';
+      if (this.role === 'host') net.send('dlgend', { id: 'area4' });
+      this.skipAreaIntro = 31; // (they sneak in: no boss preview at the gate)
+      this.loadLevel(31);
+    });
+    if (this.role === 'host') {
+      net.send('cut', { id: 'area4' });
+      this.cutscene.onLine = (i) => net.send('dlg', { id: 'area4', i });
+    }
+  }
+
   playArea2() {
-    this.state = 'cutscene'; this.fade = 0; this.fadeDir = 0; this.area2Chill = true;
+    this.state = 'cutscene'; this.fade = 0; this.fadeDir = 0;
     this.cutscene = new Area2Cutscene(this, () => {
       this.cutscene = null; this.state = 'play';
       if (this.role === 'host') net.send('dlgend', { id: 'area2' });
@@ -609,13 +679,12 @@ export class Game {
   }
   onRemoteCutscene(m = {}) {
     this.state = 'cutscene'; this.fade = 0;
-    if (m.id === 'area2') this.area2Chill = true;
     this.cutscene = new (CUTSCENES[m.id] || IntroCutscene)(this, () => { this.cutscene = null; this.state = 'transition'; this.fade = 1; }, { remote: true });
     this.cutscene.dlg.onRemoteNext = () => net.send('dlgnext', {});
   }
   onRemoteDialogueEnd(m) {
     if (m.id === 'intro') { if (this.cutscene) this.cutscene.titleT = Math.max(this.cutscene.titleT, 0); return; }
-    if (m.id === 'area2') { if (this.cutscene) this.cutscene.finish(); return; }
+    if (m.id === 'area2' || m.id === 'area4') { if (this.cutscene) this.cutscene.finish(); return; }
     this.dialogue = null;
     if (this.state === 'dialogue') this.state = 'play';
   }
@@ -717,16 +786,17 @@ export class Game {
       if (!key) continue;
       if (SACRIFICES[key].pact && !pact) continue; // a pact needs both players
       takeSacrifice(p, key);
-      if (SACRIFICES[key].pact) SACRIFICES[key].apply(p);
+      if (SACRIFICES[key].pact) applySacrifice(p, key, !!p.pactFree);
       this.fx.text(p.x, p.y, SACRIFICES[key].title, '#ff9a8a', 15, true);
       this.particles.burst('glow', p.x, p.y, 0.8, 18, 2.5, 1, 2.4, '#ff6a6a');
     }
     if (pact) this.banner({ title: 'Your souls are bound', sub: 'Every wound is now shared', kanji: '縁', dur: 2.4, y: 0.3, size: 26 });
     else if (chose('boundSouls').length) this.banner({ title: 'The pact fades', sub: 'Bound Souls needs both of you', dur: 2.4, y: 0.3, size: 24, color: 'rgba(60,4,10,0.8)' });
     sfx.gong(); this.flashScreen('rgba(160,20,30,0.3)');
-    if (this.monk) this.monk.leave();
-    this.monkActive = false;
-    this.later(1.6, () => this.openGate());
+    const swappers = this.players.filter((p) => this.sacChoices.get(p.index) === 'quickSwap' || this.sacChoices.get(p.index) === 'splinter');
+    const finish = () => { this.state = 'play'; if (this.monk) this.monk.leave(); this.monkActive = false; this.later(1.6, () => this.openGate()); };
+    const next = (i) => (i >= swappers.length ? finish() : (this.sacChoices.get(swappers[i].index) === 'splinter' ? this.splinter(swappers[i], () => next(i + 1)) : this.quickSwap(swappers[i], () => next(i + 1))));
+    if (swappers.length) this.later(1.0, () => next(0)); else finish();
   }
 
   // joiner: the host sent our two sacrifice offers
@@ -744,9 +814,121 @@ export class Game {
   onRemotePick(index, replace = null) {
     if (!this.pendingPicks || !this.pendingPicks.has(1) || !this.remoteCards) return;
     const card = this.remoteCards[index] && { ...this.remoteCards[index], replace };
-    if (card) { applyUpgrade(this.players[1], card); this.runStats.upgrades++; }
-    this.pendingPicks.delete(1);
-    this.checkPicksDone();
+    const done = () => { if (!this.pendingPicks) return; this.pendingPicks.delete(1); this.checkPicksDone(); };
+    if (card) { applyUpgrade(this.players[1], card); this.runStats.upgrades++; this.afterCard(this.players[1], card, done); } else done();
+  }
+
+  // ---------------------------------------------------------------- choosing among cards (trading in, swapping)
+  // a choice for player p: on this screen, or (the joiner online) on theirs. cb(card) or cb(null) if they left.
+  chooseCards(p, cards, mode, cb, incoming = null) {
+    if (p.remote && this.role === 'host') {
+      if (!net.connected || p.disconnected) { cb(null); return; }
+      const id = (this.chooseId = (this.chooseId || 0) + 1);
+      this.chooseWait = { id, cards, cb };
+      net.send('choose', { id, cards, mode, incoming });
+      return;
+    }
+    this.state = 'cards';
+    this.cards.open(cards, (c) => cb(c), p, { mode, incoming });
+  }
+  onRemoteChosen(m) { const W = this.chooseWait; if (!W || W.id !== m.id) return; this.chooseWait = null; W.cb(W.cards[m.index] || null); }
+  // joiner: the host asks us to choose (which card to trade in / give up, or a replacement)
+  openClientChoose(m) {
+    const me = this.localPlayer();
+    this.state = 'cards';
+    this.cards.open(m.cards, (c) => {
+      net.send('chosen', { id: m.id, index: c.i });
+      this.state = 'play';
+      this.banner({ title: 'Card chosen', sub: 'Waiting for the host…', dur: 2, y: 0.25, size: 24 });
+    }, me, { mode: m.mode, incoming: m.incoming || null });
+  }
+  // the joiner's list of picked cards changed on the host (a card traded in): send it over for their pause screen
+  syncPicked(p) { if (p.remote && this.role === 'host' && net.connected) net.send('picked', { list: p.picked || [] }); }
+  // after a card is applied: Bitter Brew asks which of your cards to trade in for its damage
+  afterCard(p, card, done) {
+    if (!card || card.type !== 'brew') { done(); return; }
+    const own = ownedCards(p);
+    // the brew's card in this run's list shows what really happened: attack damage before the trade -> after it
+    const before = p.stats.baseDamage, rec = (p.picked || []).filter((c) => c.type === 'brew').pop();
+    const gain = () => {
+      p.stats.baseDamage += card.value;
+      const pct = (v) => `${Math.round(v * 100)}%`;
+      if (rec) { rec.frozen = { cur: pct(before), bonus: `+${pct(card.value)}`, next: pct(p.stats.baseDamage) }; rec.frozenFx = { text: `+${pct(card.value)} attack damage`, desc: `Attack damage ${pct(before)} → ${pct(p.stats.baseDamage)}` }; }
+      this.fx.text(p.x, p.y, `Attack damage ${pct(p.stats.baseDamage)}`, '#ffcf6a', 15, true); this.particles.burst('ember', p.x, p.y, 0.8, 16, 2.5, 0.8, 2, '#ffcf6a');
+    };
+    if (!own.length) { gain(); done(); return; }
+    this.chooseCards(p, own, 'trade', (c) => { if (c) removeCard(p, c); gain(); this.syncPicked(p); done(); }, card);
+  }
+  // Quick Swap (a sacrifice): give up one card, then choose a new one of the same kind
+  quickSwap(p, done) {
+    const own = ownedCards(p);
+    if (!own.length) { done(); return; }
+    this.chooseCards(p, own, 'swap', (c) => {
+      if (!c) { done(); return; }
+      if (!p.swapKeep) removeCard(p, c); // (Satanist's Set, first sacrifice: you keep it)
+      p.swapKeep = false;
+      const offers = rollReward(p, rewardTypeOf(c), 0);
+      this.chooseCards(p, offers, 'swapNew', (n) => {
+        if (n) { applyUpgrade(p, n); this.runStats.upgrades++; }
+        this.syncPicked(p); this.state = 'play'; done();
+      });
+    });
+  }
+  // Splintered Gift (a sacrifice): give up one card (a core stat, imbuement or talent), then choose two new cards of
+  // that kind, each one rarity below the card given up (common stays common)
+  splinter(p, done) {
+    const own = ownedCards(p).filter((c) => c.type !== 'art');
+    if (!own.length) { done(); return; }
+    this.chooseCards(p, own, 'swap', (c) => {
+      if (!c) { done(); return; }
+      const r = Math.max(0, (c.rarity || 0) - 1), type = rewardTypeOf(c);
+      if (!p.swapKeep) removeCard(p, c); // (Satanist's Set, first sacrifice: you keep it)
+      p.swapKeep = false;
+      const round = (k) => {
+        if (k >= 2) { this.syncPicked(p); this.state = 'play'; done(); return; }
+        let offers = rollReward(p, type, 0);
+        if (type === 'talent' && offers.some((o) => o.kind === 'new')) offers = offers.filter((o) => o.kind === 'new'); // (an upgrade can't be a rarity lower)
+        offers = offers.map((o) => atRarity(p, o, r));
+        this.chooseCards(p, offers, 'swapNew', (n) => { if (n) { applyUpgrade(p, n); this.runStats.upgrades++; } round(k + 1); });
+      };
+      round(0);
+    });
+  }
+  // the first fortress level: no one at first; after a few quiet seconds the alarm is raised and the first wave comes
+  startAmbush(n) {
+    this.ambushHold = true;
+    // say a script once play is going (a card choice or a pause first: wait for it), then run next
+    const sayWhenFree = (id, next) => {
+      const go = () => {
+        if (this.level !== n || this.cleared) { this.ambushHold = false; return; }
+        if (this.state !== 'play') { this.later(0.5, go); return; }
+        this.say(id, next);
+      };
+      go();
+    };
+    this.later(AMBUSH_WAIT, () => sayWhenFree(`level${n}`, () => this.later(AMBUSH_ALARM, () => sayWhenFree(`level${n}b`, () => { this.ambushHold = false; sfx.horn && sfx.horn(); this.shake(4); }))));
+  }
+
+  // Martial Artist's Set: when the run begins, each martial artist chooses one technique for their weapon
+  // (all of its techniques on offer); the first wave waits until every choice is made
+  offerMartial() {
+    const ps = this.players.filter((p) => p.equip === 'martial');
+    this.holdSpawns = true;
+    const next = (i) => {
+      if (i >= ps.length) { this.holdSpawns = false; if (this.state === 'cards') this.state = 'play'; return; }
+      const p = ps[i], w = p.weapons[0];
+      const cards = rollReward(p, 'art', 0).filter((c) => c.type === 'art'); // two techniques, like a training hall
+      if (!cards.length) { next(i + 1); return; }
+      this.chooseCards(p, cards, 'martial', (c) => { if (c) { applyUpgrade(p, c); this.syncPicked(p); } this.state = 'play'; next(i + 1); });
+    };
+    next(0);
+  }
+  // host: the joiner spends a reroll token on the cards we sent: roll them a new hand
+  onRemoteReroll() {
+    const rp = this.players[1];
+    if (!this.pendingPicks || !this.pendingPicks.has(1) || !this.remoteReroll || !rp || (rp.rerolls ?? 0) <= 0) return;
+    rp.rerolls--;
+    this.remoteCards = this.remoteReroll(); this.online.sendCards(this.remoteCards);
   }
   checkPicksDone() {
     if (this.pendingPicks && this.pendingPicks.size === 0) { this.pendingPicks = null; this.afterPicks(); }
@@ -761,7 +943,7 @@ export class Game {
       net.send('pick', { index: card.i, replace: card.replace || null });
       this.state = 'play';
       this.banner({ title: 'Card chosen', sub: 'Waiting for the host…', dur: 2, y: 0.25, size: 24 });
-    }, me);
+    }, me, { reroll: () => { net.send('reroll', {}); return null; } }); // (the host rolls the new hand and sends it)
   }
 
   // ---------------------------------------------------------------- route map
@@ -769,14 +951,32 @@ export class Game {
   // the reward of the next level
   openRoute() {
     const next = this.level + 1;
-    if (!this.route || next > this.route.last || next < this.route.first) this.route = makeAreaMap(areaOf(next));
-    const R = this.route;
+    this.routeW = this.routeW || { sacrifice: 1, art: 1 };
+    if (!this.route || next > this.route.last || next < this.route.first) this.route = makeAreaMap(areaOf(next), undefined, this.routeW);
+    const R = this.route, col = next - R.first;
+    if (col > 0) { // the paths on offer: the follow-ups of the path we came by
+      ensureKids(R, col - 1, this.routeW);
+      if (R.path[col - 1] === undefined) R.path[col - 1] = 0;
+      if (!R.cols[col].nodes.length) takePath(R, col - 1, R.path[col - 1]); // (normally already done when that path was chosen)
+    }
+    ensureKids(R, col, this.routeW); // and what comes after each of them
+    // Smuggler's Map: the next unknown route, i.e. the follow-ups this map reveals (greyed out) for the first time,
+    // are better. Kept for later when there are none (they lead to the boss, or were already seen).
+    const fresh = R.cols[col].nodes.filter((nd) => nd.kids && !nd.kidsSeen);
+    if (this.smuggle >= 0 && col + 1 < R.cols.length - 1 && fresh.length) { for (const nd of fresh) smuggle(nd.kids, R.area, this.smuggle); this.smuggle = -1; }
+    for (const nd of R.cols[col].nodes) if (nd.kids) nd.kidsSeen = true;
     this.state = 'route'; this.fade = 1; this.fadeDir = -1;
     this.routeScreen.open(R, next, {
       onChoose: (i) => {
-        R.path[next - R.first] = i;
+        const nd = R.cols[col].nodes[i];
+        if (col < R.cols.length - 1 && nd) shiftWeights(this.routeW, nd.r);
+        takePath(R, col, i);
+        rollCorruption(this, nd, next); // it may turn out to be corrupted (the host decides; it travels in the level info)
         this.routeNext = next;
-        this.state = 'transition'; this.fade = 0; this.fadeDir = 1;
+        const go = () => { this.state = 'transition'; this.fade = 0; this.fadeDir = 1; };
+        // a corrupted node shows what it turned into on the map first (and to the joiner too)
+        if (nd && nd.corrupt) { this.routeScreen.startReveal(nd.corrupt, i, go); if (this.role === 'host') net.send('creveal', { kind: nd.corrupt, i }); }
+        else go();
       },
     });
     if (this.role === 'host') {
@@ -849,10 +1049,20 @@ export class Game {
   }
 
   // ---------------------------------------------------------------- spawning
-  // Enemies step out of house doorways; fall back to an ink portal if no door is usable.
+  // Enemies step out of house doorways, or walk in from somewhere out of sight: behind a building or beyond the
+  // edge of the screen. They never just appear on open ground in view.
   spawnEnemy(type) {
     const w = this.world, r = ENEMIES[type].r;
+    { const c = this.coverSpawn(type, r); if (c) return c; } // out of a bush / a pile of leaves
     const doors = w.doors().filter((d) => !w.blocked(d.ox, d.oy, r + 0.1) && this.players.every((p) => p.dead || dist(p.x, p.y, d.ox, d.oy) > 3.5));
+    const hidden = doors.length && Math.random() < 0.45 ? null : this.hiddenSpawn(r); // mix doors with walk-ins from out of sight
+    if (hidden) {
+      const [x0, y0, x1, y1] = hidden;
+      const e = new Enemy(this, type, x0, y0, this.level);
+      e.emerge = { x0, y0, x1, y1 }; e.t = e.spawnDur = Math.min(1.4, 0.3 + Math.hypot(x1 - x0, y1 - y0) / Math.max(2, e.speed));
+      this.addEnemy(e);
+      return e;
+    }
     if (doors.length) {
       const d = pick(doors);
       d.house.doorT = 1.6;
@@ -865,12 +1075,63 @@ export class Game {
       sfx.spawn();
       return e;
     }
+    // nothing hidden and no door free: the far edge of the arena, away from everyone
     const c = this.playersCenter(true);
-    const [x, y] = w.randomFreePoint(c[0], c[1], 5.5, r + 0.2);
-    const e = new Enemy(this, type, x, y, this.level);
+    let best = null, bd = -1;
+    for (let k = 0; k < 40; k++) { const [x, y] = w.randomFreePoint(c[0], c[1], 6, r + 0.2); const d = Math.min(...this.players.filter((p) => !p.dead).map((p) => dist(p.x, p.y, x, y)), 99); if (d > bd) { bd = d; best = [x, y]; } }
+    const e = new Enemy(this, type, best[0], best[1], this.level);
+    e.emerge = { x0: best[0], y0: best[1], x1: best[0], y1: best[1] }; // (walks on at once: no ink pool)
     this.addEnemy(e);
-    this.particles.burst('smoke', x, y, 0.3, 6, 1.5, 0.7, 7, 'rgba(50,35,60,1)');
     return e;
+  }
+  // area 1: bandits, ninjas, archers and bombers sometimes step out of a bush; area 2: anything can burst out of a
+  // pile of fallen leaves. Never right next to a player (3 tiles).
+  coverSpawn(type, r) {
+    const w = this.world, kind = w.bi === 0 ? 'hidebush' : w.bi === 1 ? 'leafpile' : null;
+    if (!kind || w.kind === 'dojo' || Math.random() > 0.4) return null;
+    if (kind === 'hidebush' && !COVER_SNEAKY.includes(type)) return null;
+    const spots = w.props.filter((p) => p.kind === kind && this.players.every((pl) => pl.dead || dist(pl.x, pl.y, p.x, p.y) > 3));
+    if (!spots.length) return null;
+    const c = pick(spots), a = rand(0, TAU);
+    c.rustleT = this.time;
+    const e = new Enemy(this, type, c.x, c.y, this.level);
+    let x1 = c.x + Math.cos(a) * 0.9, y1 = c.y + Math.sin(a) * 0.9;
+    if (w.blocked(x1, y1, r)) { x1 = c.x; y1 = c.y; }
+    e.emerge = { x0: c.x, y0: c.y, x1, y1 }; e.t = e.spawnDur = 0.7;
+    this.addEnemy(e);
+    this.particles.burst('leaf', c.x, c.y, 0.4, kind === 'hidebush' ? 8 : 14, 3, 0.8, 3, kind === 'hidebush' ? '#4a7a38' : '#d2642a', { drag: 1.5 });
+    sfx.spawn();
+    return e;
+  }
+  // a spawn spot nobody can see: [x0, y0, x1, y1] = start out of sight, then the first steps toward the fight.
+  // Out of sight = off the screen (with a margin) or behind a house (between it and the camera's far side).
+  hiddenSpawn(r) {
+    const w = this.world, v = this.view, N = w.N, live = this.players.filter((p) => !p.dead);
+    if (!live.length) return null;
+    const onScreen = (x, y, m) => { const [sx, sy] = v.toScreen(x, y, 0.6); return sx > -m && sx < v.W + m && sy > -m * 1.6 && sy < v.H + m; };
+    const m = 70 * v.dpr, c = this.playersCenter(true);
+    for (let k = 0; k < 60; k++) {
+      // try the arena's rim first, then anywhere
+      const rim = k < 40, a = Math.random() * TAU;
+      let x = rim ? clamp(N / 2 + Math.cos(a) * N, 1.2, N - 1.2) : 1.2 + Math.random() * (N - 2.4), y = rim ? clamp(N / 2 + Math.sin(a) * N, 1.2, N - 1.2) : 1.2 + Math.random() * (N - 2.4);
+      if (w.blocked(x, y, r + 0.15)) continue;
+      if (live.some((p) => dist(p.x, p.y, x, y) < 7)) continue;
+      if (onScreen(x, y, m)) continue;
+      const dx = c[0] - x, dy = c[1] - y, l = Math.hypot(dx, dy) || 1, step = Math.min(2.5, l * 0.4);
+      let x1 = x + (dx / l) * step, y1 = y + (dy / l) * step;
+      if (w.blocked(x1, y1, r + 0.1)) { x1 = x; y1 = y; }
+      return [x, y, x1, y1];
+    }
+    // behind a house: the side facing away from the camera (smaller x + y), out of the players' line of sight
+    const houses = w.props.filter((p) => p.kind === 'house');
+    for (let k = 0; k < 20 && houses.length; k++) {
+      const H = houses[Math.floor(Math.random() * houses.length)], x = H.x0 + Math.random() * (H.x1 - H.x0), y = H.y0 - 0.6 - r;
+      if (w.blocked(x, y, r + 0.1) || live.some((p) => dist(p.x, p.y, x, y) < 4)) continue;
+      const side = Math.random() < 0.5 ? H.x0 - 0.7 - r : H.x1 + 0.7 + r;
+      const x1 = w.blocked(side, y + 0.4, r + 0.1) ? x : side, y1 = w.blocked(side, y + 0.4, r + 0.1) ? y : y + 0.4;
+      return [x, y, x1, y1];
+    }
+    return null;
   }
 
   startBossIntro(cfg) {
@@ -967,11 +1228,17 @@ export class Game {
   localShake(a) { this.shakeAmt = Math.max(this.shakeAmt, a); }
   // hit-stop: big moments (boss kills, slams: 0.1 s and up) keep their full pause; ordinary hits pause half as long,
   // and while you chain hits (several enemies, quick strikes) only one in every HITSTOP_GAP seconds pauses at all
+  // On top of that, ordinary hit-stops share a budget: at most HITSTOP_BUDGET s of freeze in any HITSTOP_WINDOW s,
+  // so crits, kills and heavy hits piling up in a busy fight never make the game stutter.
   hitstop(s) {
     if (s >= 0.1) { this.hitstopT = Math.max(this.hitstopT, s); return; }
     const now = this.realTime;
     if (now - (this.lastHitstop ?? -9) < HITSTOP_GAP) return;
-    this.lastHitstop = now; this.hitstopT = Math.max(this.hitstopT, s * 0.5);
+    this.hsLog = (this.hsLog || []).filter((h) => now - h[0] < HITSTOP_WINDOW);
+    const used = this.hsLog.reduce((a, h) => a + h[1], 0), d = Math.min(s * 0.5, HITSTOP_BUDGET - used);
+    if (d < 0.005) return;
+    this.hsLog.push([now, d]);
+    this.lastHitstop = now; this.hitstopT = Math.max(this.hitstopT, d);
   }
   slow(dur, scale) { this.slowT = dur; this.slowScale = scale; }
   // slows enemies, their projectiles and hazards, but not the players (bo special)
@@ -982,11 +1249,25 @@ export class Game {
   banner(b) { this.banners.push({ t: 0, dur: 2.2, ...b }); }
   bossPhase(e, msg) { this.banner({ title: msg, dur: 1.8, y: 0.22, size: 26, color: 'rgba(90,10,10,0.8)' }); e.flash = 0.25; }
 
+  // what enemies can hurt: the players and the spirit orb's spirits
+  get targets() { return this.spirits && this.spirits.length ? this.players.concat(this.spirits.filter((s) => !s.dead)) : this.players; }
+
   // src: { player, weapon } for player hits; { chain: true } for lightning; { dot: true } for poison ticks
   damageEnemy(e, dmg, crit, dx, dy, knock, stun, src = null) {
     this.combatT = this.realTime;
     if (e.dead || e.state === 'intro') return;
     const dot = src && src.dot, chain = src && src.chain;
+    { // Opening Strike: blows on a healthy enemy (above 80% health; whole hits, not poison ticks or chains)
+      const os = src && src.player && src.player.stats && src.player.stats.openStrike;
+      if (os && !dot && !chain && e.hp > e.hpMax * OPEN_STRIKE_HP) dmg = Math.round(dmg * (1 + os));
+    }
+    if (src && src.player && this.hazards.length) { // Smoke Bomb: hits on enemies inside your smoke hurt more
+      for (const h of this.hazards) if (h.kind === 'smoke' && h.t > 0 && h.from === src.player && Math.hypot(e.x - h.x, e.y - h.y) < h.r) { dmg = Math.round(dmg * (1 + h.bonus)); break; }
+    }
+    if (src && src.storm && src.player && src.player.stormRefund) { // Endless Storm: energy back for every enemy its blades hit
+      const S = src.storm; S.paid = S.paid || new Set();
+      if (!S.paid.has(e)) { S.paid.add(e); src.player.gainEnergy(src.player.stormRefund, true); }
+    }
     // shadow clone hits are 'quiet': no hitstop or shake (four clones hitting all the time made the game stutter) and fewer particles
     const ally = !!(src && src.ally);
     // training-hall fighters read the blow and slip it (not while they are attacking or stunned)
@@ -1024,6 +1305,11 @@ export class Game {
     }
     // Hunter's Mark: a marked enemy takes more from every other source
     if (e.markT > 0 && !(src && src.mark)) dmg = Math.max(1, Math.round(dmg * (e.markMul || 1.2)));
+    // the holy staff's blessing: a vulnerable enemy takes more from everything but the staff's own burst
+    if (e.vulnT > 0 && !(src && src.vuln)) dmg = Math.max(1, Math.round(dmg * (e.vulnMul || 1.2)));
+    // (the spirit orb's tether no longer makes enemies take more damage: removed 2026-11-20)
+    // the enemy a player fights: their spirits go for it too
+    if (src && src.player && !src.spirit && !dot && !chain) src.player.focusE = e;
     e.hp -= dmg;
     this.runStats.damage += dmg;
     if (src && !dot) {
@@ -1038,8 +1324,10 @@ export class Game {
         else if (N) { e.slow = Math.max(e.slow, N.bossSlow); e.slowT = Math.max(e.slowT, 1); }
       }
     }
+    if (src && src.player && src.weapon && !dot && !chain && src.player.onWeaponHit) src.player.onWeaponHit(e, src);
+    if (chain) e.shockT = Math.max(e.shockT || 0, 0.7);
     if (dot) {
-      this.fx.text(e.x, e.y, `${dmg}`, '#9be86a', 11);
+      this.fx.text(e.x, e.y, `${dmg}`, src && src.pool ? '#ffffff' : src && src.crush ? '#b07a44' : src && src.burn ? '#ffa040' : src && src.tether ? '#9fd8ff' : '#9be86a', 11); // poison is green; the holy pool's ticks are white; tethers pale blue
     } else {
       e.flash = 0.09;
       if (src && src.shudder) e.shudder = Math.max(e.shudder || 0, src.shudder); // crossbow bolts: the target shudders
@@ -1050,7 +1338,9 @@ export class Game {
         const s = stun * (e.type === 'oni' ? 0.4 : 1);
         if (s >= 0.3 && e.poiseT <= 0) { e.stun = Math.max(e.stun, s); e.poiseT = s + 0.8; }
       }
-      this.fx.text(e.x, e.y, crit ? `${dmg}!` : `${dmg}`, blocked ? '#9aa4b4' : chain ? '#fff27a' : crit ? '#ffd34a' : '#ffffff', blocked ? 12 : crit ? 19 : chain ? 12 : 14, crit && !blocked);
+      // a normal hit's number: 11.5 at the bottom of the damage range up to 14 at the top (crits stay 19)
+      const LR = src && src.player && src.player.lastRoll, roll = LR && LR.t === this.time ? LR.r : 0;
+      this.fx.text(e.x, e.y, crit ? `${dmg}!` : `${dmg}`, blocked ? '#9aa4b4' : chain ? '#fff27a' : crit ? '#ffd34a' : '#ffffff', blocked ? 12 : crit ? 19 : chain ? 12 : 12.75 + 1.25 * roll, crit && !blocked);
       const z = e.boss ? 1.2 : 0.6;
       this.particles.burst('spark', e.x, e.y, z, ally ? 3 : crit ? 9 : 5, crit ? 8 : 5, 0.22, crit ? 2 : 1.4, chain ? '#fff6a0' : crit ? '#ffe680' : '#ffffff');
       if (!chain) this.particles.burst('blood', e.x, e.y, z, ally ? 2 : 4, 3, 0.45, 2.2, e.type === 'dummy' ? '#d8b46a' : e.type === 'kappa' ? '#2a6a3a' : e.type === 'oni' || e.type === 'oni_lord' ? '#3a0a3a' : '#7a1020', { grav: 10 });
@@ -1058,10 +1348,69 @@ export class Game {
       if (crit) { sfx.crit(); if (!ally) { this.hitstop(0.035); this.shake(2.5); } } else if (!chain) (snd && sfx[snd] ? sfx[snd]() : sfx.hit());
       if (src && src.weapon && !chain) this.applyElements(e, dmg, src);
     }
-    if (src && src.player) { e.killer = src.player; e.killWeapon = src.weapon || null; e.lastHitT = this.time; }
+    if (src && src.player && !src.spirit) { e.killer = src.player; e.killWeapon = src.weapon || null; e.lastHitT = this.time; }
     if (e.type === 'dummy') { e.data.lastHit = this.time; if (this.trainingStats) { this.trainingStats.log.push([this.time, dmg]); this.trainingStats.total += dmg; } if (e.hp <= 0) { e.hp = e.hpMax; this.fx.text(e.x, e.y, 'Reset', '#cfe8ff', 13); } }
     if (e.hp <= 0 && !e.dead && src && src.player && src.player.onKill) src.player.onKill(e, src);
     if (e.hp <= 0) this.killEnemy(e, dx, dy, ally);
+  }
+
+  // ---------------------------------------------------------------- burn (imbuement): fires on the ground
+  // each fire ticks every burnTick s, dealing its pool / ticks left to every enemy in it (the host deals it)
+  updateBurns(dt) {
+    if (!this.burns || !this.burns.length) return;
+    for (const B of this.burns) {
+      B.t -= dt; B.tick -= dt;
+      if (B.tick <= 0 && B.left > 0 && this.role !== 'client') {
+        B.tick += ELEMENT_RULES.burnTick;
+        const n = Math.max(1, Math.round(B.pool / B.left)); B.pool = Math.max(0, B.pool - n); B.left--;
+        for (const o of this.enemies) {
+          if (o.dead || o.hidden || o.state === 'spawn' || o.state === 'intro' || dist(o.x, o.y, B.x, B.y) > B.r) continue; // (an enemy burns when its centre is in the fire)
+          this.damageEnemy(o, n, false, 0, 0, 0, 0, { player: B.player, weapon: B.weapon, dot: true, burn: true });
+        }
+      }
+      if (Math.random() < dt * 14) this.particles.emit('ember', B.x + (Math.random() - 0.5) * B.r * 1.6, B.y + (Math.random() - 0.5) * B.r * 1.6, 0.05, 0, 0, 0.9 + Math.random() * 0.6, 0.6 + Math.random() * 0.4, 1.8, Math.random() < 0.5 ? '#ffb040' : '#ff6a2a');
+    }
+    this.burns = this.burns.filter((B) => B.t > 0);
+  }
+  // cut arrows: two halves lying on the ground, fading after a few seconds
+  drawCutBits(ctx) {
+    if (!this.cutBits || !this.cutBits.length) return;
+    this.cutBits = this.cutBits.filter((b) => this.time - b.t < 4);
+    for (const b of this.cutBits) {
+      const age = this.time - b.t, fall = Math.min(1, age / 0.25), a = Math.min(1, (4 - age) / 0.8);
+      const sx = isoX(b.x, b.y), sy = isoY(b.x, b.y, 0.6 * (1 - fall)), sa = Math.atan2(Math.sin(b.a) * 0.5, Math.cos(b.a)); // (screen angle of its flight)
+      ctx.save(); ctx.globalAlpha = a; ctx.translate(sx, sy); ctx.lineCap = 'round';
+      for (const side of [-1, 1]) { // each half drifts apart and turns a little as it drops
+        ctx.save(); ctx.translate(side * 5 * fall * Math.cos(sa), side * 5 * fall * Math.sin(sa) + 2 * fall); ctx.rotate(sa + side * b.s * 0.5 * fall);
+        ctx.strokeStyle = b.kind === 'kunai' || b.kind === 'bolt' ? '#5a5f66' : '#5a3a1e'; ctx.lineWidth = 1.6;
+        ctx.beginPath(); ctx.moveTo(side > 0 ? 1 : -9, 0); ctx.lineTo(side > 0 ? 9 : -1, 0); ctx.stroke();
+        if (side > 0) { ctx.fillStyle = b.kind === 'icearrow' ? '#cff4ff' : '#dddddd'; ctx.beginPath(); ctx.moveTo(9, -2); ctx.lineTo(13, 0); ctx.lineTo(9, 2); ctx.fill(); } // the head
+        else { ctx.fillStyle = '#eeeeee'; ctx.beginPath(); ctx.moveTo(-9, 0); ctx.lineTo(-12, -2.5); ctx.lineTo(-7, 0); ctx.lineTo(-12, 2.5); ctx.fill(); } // the fletching
+        ctx.restore();
+      }
+      ctx.restore();
+    }
+  }
+  // a burning patch: a glowing scorched ellipse with flames licking up round its edge
+  drawBurns(ctx, t) {
+    if (!this.burns || !this.burns.length) return;
+    const TILE = 45.25;
+    for (const B of this.burns) {
+      const a = Math.min(1, B.t / 0.35, (ELEMENT_RULES.burnDur - B.t + 0.08) / 0.12), rx = B.r * TILE, ry = rx * 0.5 /* (drawn at its true radius: the hit area is exactly what you see) */, sx = isoX(B.x, B.y), sy = isoY(B.x, B.y);
+      ctx.save(); ctx.globalAlpha = Math.max(0, a);
+      const gr = ctx.createRadialGradient(sx, sy, 0, sx, sy, rx);
+      gr.addColorStop(0, 'rgba(255,170,60,0.6)'); gr.addColorStop(0.7, 'rgba(230,80,20,0.42)'); gr.addColorStop(1, 'rgba(120,20,0,0)');
+      ctx.fillStyle = gr; ctx.beginPath(); ctx.ellipse(sx, sy, rx, ry, 0, 0, TAU); ctx.fill();
+      ctx.strokeStyle = 'rgba(255,150,60,0.7)'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.ellipse(sx, sy, rx, ry, 0, 0, TAU); ctx.stroke();
+      ctx.globalCompositeOperation = 'lighter';
+      for (let k = 0; k < 9; k++) { // flames round the edge, each flickering at its own pace
+        const ang = (k / 9) * TAU + B.seed, fl = 0.6 + 0.4 * Math.sin(t * (9 + k) + B.seed * 3 + k);
+        const fx = sx + Math.cos(ang) * rx * 0.82, fy = sy + Math.sin(ang) * ry * 0.82, h = (9 + (k % 3) * 3) * fl;
+        ctx.fillStyle = k % 2 ? 'rgba(255,190,70,0.75)' : 'rgba(255,110,30,0.75)';
+        ctx.beginPath(); ctx.moveTo(fx - 3.5, fy); ctx.quadraticCurveTo(fx - 2, fy - h * 0.6, fx + Math.sin(t * 7 + k) * 1.5, fy - h); ctx.quadraticCurveTo(fx + 2, fy - h * 0.6, fx + 3.5, fy); ctx.closePath(); ctx.fill();
+      }
+      ctx.restore();
+    }
   }
 
   breakShield(e) {
@@ -1077,28 +1426,50 @@ export class Game {
 
   applyElements(e, dmg, src) {
     const el = src.weapon.elements, R = ELEMENT_RULES;
-    const M = (src.player && src.player.elemMul) || 1; // Elemental Covenant
+    const P0 = src.player, M = ((P0 && P0.elemMul) || 1) * (P0 && P0.elemStormT > 0 ? 1 + P0.elemStormBonus : 1); // Elemental Covenant, Elemental Storm
     if (el.syphon > 0 && src.player) { // lifesteal: heal for a share of the damage dealt (fractions carry over)
       const P = src.player;
       // Lifebinder: the heal goes to the partner instead (x1.5)
-      const to = P.lifebinder ? this.players.find((q) => q !== P && q.active) : P;
-      P.syphonAcc = (P.syphonAcc || 0) + dmg * Math.min(ELEMENTS.syphon.cap, el.syphon * M) * (P.lifebinder ? 1.5 : 1);
+      const partner = P.lifebinder ? this.players.find((q) => q !== P && q.active) : null, keep = P.lifebinder && P.lifebinderSelf; // (Satanist: you keep your own heal too)
+      const to = P.lifebinder && !keep ? partner : P;
+      // (tiny hits add up: 5 damage at 1% is 0.05, kept until it makes a whole point)
+      P.syphonAcc = (P.syphonAcc || 0) + dmg * Math.min(ELEMENTS.syphon.cap, el.syphon * M) * (P.lifebinder && !keep ? 1.5 : 1);
       if (P.syphonAcc >= 1) {
         const n = Math.floor(P.syphonAcc); P.syphonAcc -= n;
-        if (to && to.heal(n) > 0 && Math.random() < 0.5) this.particles.emit('glow', to.x, to.y, 0.8, 0, 0, 0.8, 0.5, 2.2, '#ff6b8a');
+        if (keep && partner) partner.heal(Math.round(n * 1.5));
+        const got = to ? to.heal(n) : 0;
+        if (got > 0) { to.healPop = (to.healPop || 0) + got; if (Math.random() < 0.5) this.particles.emit('glow', to.x, to.y, 0.8, 0, 0, 0.8, 0.5, 2.2, '#ff6b8a'); }
       }
     }
-    if (el.poison > 0) {
-      const dps = el.poison * M * src.player.stats.baseDamage * (src.player.adminMul || 1);
-      e.poison = { dps: Math.max(dps, e.poison ? e.poison.dps : 0), t: R.poisonDur, tick: e.poison ? e.poison.tick : R.poisonTick, player: src.player };
+    if (el.arcane > 0 && src.player) { // arcane: damage dealt flows back as energy (fractions carry over)
+      const P = src.player;
+      P.arcAcc = (P.arcAcc || 0) + dmg * Math.min(ELEMENTS.arcane.cap, el.arcane * M);
+      if (P.arcAcc >= 1) { const n = Math.floor(P.arcAcc); P.arcAcc -= n; P.gainEnergy(n); }
+      if (Math.random() < 0.6) this.particles.burst('glow', e.x, e.y, 0.8, 3, 2.5, 0.45, 2, '#6ab4ff');
+    }
+    if (el.poison > 0) { // a share of this hit goes into the enemy's poison, which drains over poisonDur s
+      let near = 0; // (other poisoned enemies close by make it spread harder)
+      for (const o of this.enemies) if (o !== e && !o.dead && o.poison && o.poison.t > 0 && dist(o.x, o.y, e.x, e.y) < POISON_GROUP.range && ++near >= POISON_GROUP.max) break;
+      const share = Math.min(ELEMENTS.poison.cap, el.poison * M) * (POISON_GROUP.base + POISON_GROUP.per * near);
+      if (Math.random() < 0.5) this.particles.burst('glow', e.x, e.y, 0.6, 4, 1.6, 0.6, 2, '#8fe05a');
+      const P = e.poison && e.poison.pool != null && !e.poison.net ? e.poison : (e.poison = { pool: 0, acc: 0, tick: R.poisonTick });
+      P.pool += dmg * share; P.rate = P.pool / R.poisonDur; P.t = R.poisonDur; P.player = src.player;
+    }
+    if (el.burn > 0) { // burn: the ground under the enemy catches fire (or the fire already under it grows)
+      const share = Math.min(ELEMENTS.burn.cap, el.burn * M);
+      let B = this.burns.find((b) => b.e === e && b.t > 0 && dist(b.x, b.y, e.x, e.y) < 0.7);
+      if (!B && this.burns.length < 40) { B = { e, x: e.x, y: e.y, t: 0, tick: R.burnTick, pool: 0, r: R.burnRadius, player: src.player, weapon: src.weapon, seed: Math.random() * 10 }; this.burns.push(B); this.particles.burst('ember', e.x, e.y, 0.1, 8, 2.5, 0.6, 2.2, '#ffa040'); }
+      if (B) { B.pool += dmg * share; B.t = R.burnDur; B.left = Math.round(R.burnDur / R.burnTick); }
     }
     if (el.ice > 0) {
       e.slow = Math.min(ELEMENTS.ice.cap, Math.max(e.slow, el.ice * M)); e.slowT = R.slowDur;
-      if (Math.random() < 0.5) this.particles.burst('shard', e.x, e.y, 0.8, 3, 2, 0.4, 2.5, '#cff4ff');
+      if (Math.random() < 0.6) this.particles.burst('shard', e.x, e.y, 0.8, 4, 2.5, 0.45, 2.5, '#cff4ff');
+      if (Math.random() < 0.4) this.particles.burst('dot', e.x, e.y, 0.5, 5, 1.5, 0.6, 1.8, '#ffffff');
     }
     if (el.lightning > 0) {
       const hit = new Set([e]);
       let from = e;
+      e.shockT = Math.max(e.shockT || 0, 0.7);
       for (let n = 0; n < el.lightning * M; n++) {
         let best = null, bd = R.chainRange;
         for (const o of this.enemies) {
@@ -1109,7 +1480,9 @@ export class Game {
         if (!best) break;
         hit.add(best);
         this.fx.bolt(from.x, from.y, from.boss ? 1.2 : 0.6, best.x, best.y, best.boss ? 1.2 : 0.6);
-        this.damageEnemy(best, Math.max(1, Math.round(dmg * chainDamageFor(el.lightning))), false, 0, 0, 0.5, 0, { chain: true, player: src.player });
+        // (fair rounding: a 0.5 chain hits for 1 half of the time, so small fast hits don't chain for a full point every time)
+        const cv = dmg * chainDamageFor(el.lightning, dmg), cd = Math.floor(cv) + (Math.random() < cv - Math.floor(cv) ? 1 : 0);
+        if (cd > 0) this.damageEnemy(best, cd, false, 0, 0, 0.5, 0, { chain: true, player: src.player });
         from = best;
       }
       if (hit.size > 1) sfx.zap();
@@ -1121,6 +1494,8 @@ export class Game {
     if (e.type === 'gensai') { this.gensaiDown(e); return; }
     e.dead = true; e.deathT = 0; e.tele = null; e.hidden = false; e.vx = dx * 2; e.vy = dy * 2; e.poison = null;
     this.runStats.kills++;
+    tetherOnDeath(this, e); // a spirit orb tether jumps on to the next enemy
+    rememberFallen(this, e); // ... and the orb's special can call this one back
     const bi = this.world.bi;
     sfx.death();
     this.particles.burst('ink', e.x, e.y, 0.6, e.boss ? 40 : 14, e.boss ? 6 : 3.5, 0.7, e.boss ? 6 : 4, '#1e1428');
@@ -1177,7 +1552,7 @@ export class Game {
         if (d < 0.45) {
           k.taken = true;
           if (k.kind === 'heal') { const got = best.heal(k.amt); this.fx.text(best.x, best.y, `+${Math.round(got)}`, '#7dff9a', 16); }
-          else { const b = best.energy; best.energy = Math.min(best.maxEnergy, best.energy + k.amt); this.fx.text(best.x, best.y, `+${Math.round(best.energy - b)} energy`, '#9ee8ff', 16); }
+          else best.gainEnergy(k.amt, true); // a blue +N on the player
           this.particles.burst('glow', best.x, best.y, 0.7, 12, 2, 0.6, 2.2, k.kind === 'heal' ? '#9dffb0' : '#9ee8ff');
           sfx.chime(0);
         }
@@ -1237,7 +1612,8 @@ export class Game {
           if (client) this.stepClient(dtReal); // online the world keeps going for the joiner
           break;
         }
-        if (this.state === 'play' && input.pressed('pause')) { this.setPaused(true); input.eat('pause'); break; }
+        if ((this.state === 'play' || this.state === 'cards') && input.pressed('pause')) { this.setPaused(true); input.eat('pause'); break; } // (also while choosing a card)
+        if (this.martialPending && this.state === 'play' && !this.training && this.spawner && this.fade <= 0.05) { this.martialPending = false; this.offerMartial(); }
         if (this.state === 'cards') { this.cards.update(dtReal); if (client) this.stepClient(dtReal); else this.updateWorldAmbient(dtReal * 0.3); break; }
         if (client) { if (this.state !== 'transition') this.stepClient(dtReal); } else this.updatePlay(dtReal);
         break;
@@ -1259,7 +1635,7 @@ export class Game {
       if (this.fadeDir > 0 && this.fade >= 1) {
         this.fadeDir = 0;
         if (this.state === 'transition' && this.role !== 'client') {
-          if (this.routeNext === this.level + 1) { this.routeNext = 0; this.state = 'play'; if (this.level + 1 === 11) this.playArea2(); else this.loadLevel(this.level + 1); }
+          if (this.routeNext === this.level + 1) { this.routeNext = 0; this.state = 'play'; if (this.level + 1 === 11) this.playArea2(); else if (this.level + 1 === 31) this.playArea4(); else this.loadLevel(this.level + 1); }
           else this.openRoute();
         }
       }
@@ -1304,6 +1680,7 @@ export class Game {
   step(dt) {
     const w = this.world, P = this.players;
     this.time += dt;
+    updateCorruption(this, dt, true);
     if (this.state === 'play') this.runStats.time += dt;
     for (let i = this.timers.length - 1; i >= 0; i--) { const tm = this.timers[i]; tm.t -= dt; if (tm.t <= 0) { this.timers.splice(i, 1); tm.fn(); } }
 
@@ -1320,6 +1697,7 @@ export class Game {
     let edt = dt;
     if (this.warpT > 0) { this.warpT -= dt; edt = dt * this.warpScale; }
     updateAllies(this, dt);
+    updateSpirits(this, dt);
     this.updatePickups(dt);
     if (this.monk) { this.monk.update(dt); if (this.monk.done) this.monk = null; }
     this.nav.update(dt);
@@ -1351,6 +1729,7 @@ export class Game {
 
     updateProjectiles(this, edt);
     updateHazards(this, edt, dt);
+    this.updateBurns(edt);
     w.update(dt, this.time, this.particles, this.view);
     this.particles.update(dt, (x, y, t) => w.wind(x, y, t), this.time);
     this.decals.update(dt); this.fx.update(dt);
@@ -1363,7 +1742,7 @@ export class Game {
       const A = w.library || w.shrine, D = A.desk;
       if (P.some((p) => p.active && dist(p.x, p.y, D.x, D.y) < 1.5)) {
         this.scrollWaiting = false; A.taken = true; A.ready = false;
-        sfx.select(); this.particles.burst('glow', D.x, D.y, 1.0, 16, 2, 0.9, 2.2, '#ffe6a0');
+        sfx.take(); this.particles.burst('glow', D.x, D.y, 1.0, 16, 2, 0.9, 2.2, '#ffe6a0');
         this.offerBlessings(0.3, true);
       }
     }
@@ -1375,9 +1754,11 @@ export class Game {
   stepClient(dt) {
     if (this.hitstopT > 0) { this.hitstopT -= dt; this.updateShake(dt); return; }
     this.time += dt;
+    updateCorruption(this, dt, false);
     const me = this.localPlayer();
     if (me && this.state !== 'cards' && this.state !== 'dialogue') me.update(dt);
     smoothPuppets(this, dt);
+    updateSpirits(this, dt); // (the joiner only moves the host's spirits along)
     this.world.update(dt, this.time, this.particles, this.view);
     this.particles.update(dt, (x, y, t) => this.world.wind(x, y, t), this.time);
     this.decals.update(dt); this.fx.update(dt);
@@ -1451,8 +1832,14 @@ export class Game {
     this.decals.draw(ctx);
     this.particles.draw(ctx, true);
     this.fx.drawGround(ctx);
+    this.fx.drawQuakes(ctx); // (the gloves' ground cracks)
     drawHazards(ctx, this, t);
+    this.drawBurns(ctx, t);
+    this.drawCutBits(ctx);
+    drawCorruptionGround(ctx, this, t);
+    for (const e of this.enemies) e.drawAura(ctx, t); // (Banner Bearer circles, under the attack telegraphs)
     for (const e of this.enemies) e.drawTelegraph(ctx, t);
+    for (const p of this.players) p.drawBoltMarks(ctx, t); // crossbow marks on the ground around the marked enemy
     for (const e of this.enemies) e.drawShadow(ctx);
     for (const p of this.players) p.drawShadow(ctx);
     for (const p of this.players) if (!p.remote && !p.puppet) { p.drawAimGuide(ctx); p.drawChargeIndicator(ctx); } // only on the shooter's own screen
@@ -1477,22 +1864,27 @@ export class Game {
       items.push({ d, draw: () => { ctx.globalAlpha = alpha; w.drawProp(ctx, pr, t); ctx.globalAlpha = 1; } });
     }
     for (const e of this.enemies) items.push({ d: e.x + e.y + 0.01, draw: () => e.draw(ctx, t) });
-    for (const p of this.players) items.push({ d: p.x + p.y + 0.02, draw: () => p.draw(ctx, t) });
+    for (const p of this.players) { items.push({ d: p.x + p.y + 0.02, draw: () => p.draw(ctx, t) }); if (p.addWorldItems) p.addWorldItems(items, ctx, t); } // (thrown katanas, the shield disc, the orb)
     for (const a of this.allies) { a.drawShadow(ctx); items.push({ d: a.x + a.y + 0.015, draw: () => a.draw(ctx, t) }); }
+    for (const s of this.spirits) { s.drawShadow(ctx); items.push({ d: s.x + s.y + 0.016, draw: () => s.draw(ctx, t) }); }
     if (this.monk) { const m = this.monk; m.drawShadow(ctx); items.push({ d: m.x + m.y + 0.015, draw: () => m.draw(ctx, t) }); }
     for (const q of this.projectiles) items.push({ d: q.x + q.y + 0.03, draw: () => drawProjectiles(ctx, [q], t) });
     for (const k of this.pickups) items.push({ d: k.x + k.y + 0.005, draw: () => this.drawPickup(ctx, k, t) });
     items.sort((a, b) => a.d - b.d);
     for (const it of items) it.draw();
+    drawCorruptionOver(ctx, this, t); // the mist's clouds, over everyone
 
     this.particles.draw(ctx, false);
+    drawSpiritFx(ctx, this, t);
     this.fx.drawSlashes(ctx);
+    this.fx.drawPulls(ctx);
+    this.fx.drawEarth(ctx); // (the gloves' rising rock, the shield's lion roar)
     this.fx.drawBolts(ctx);
     this.fx.drawTexts(ctx);
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     const extra = [];
-    if (w.biome.night) {
+    if (w.biome.night || w.forceNight) {
       for (const p of pls) extra.push({ x: p.x, y: p.y, z: 0.6, r: 2.6, i: 0.75, flicker: 0, color: '200,210,255' });
       for (const h of this.hazards) if (h.kind === 'fire') extra.push({ x: h.x, y: h.y, z: 0.2, r: h.r * 2.2, i: 0.8, flicker: 1, color: '255,120,40' });
       for (const q of this.projectiles) if (q.kind === 'orb') extra.push({ x: q.x, y: q.y, z: q.z, r: 1.4, i: 0.7, flicker: 0, color: '140,210,255' });
@@ -1506,6 +1898,7 @@ export class Game {
     w.drawFog(ctx, v, t);
     w.drawWeather(ctx, v, t);
     w.drawGrade(ctx, v);
+    drawCorruptionScreen(ctx, this, v, t);
     if (this.tenseVis > 0.01 || this.tenseEmbers.length) drawTenseOverlay(ctx, this);
     drawCinemaBars(ctx, this);
     if (this.warpT > 0) { // slowed time: cool tint and soft dark edges

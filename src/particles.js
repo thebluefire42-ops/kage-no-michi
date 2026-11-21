@@ -138,7 +138,7 @@ export class Decals {
 
 // Visual effects: slashes, rings, floating texts, flashes.
 export class Effects {
-  constructor() { this.slashes = []; this.rings = []; this.texts = []; this.bolts = []; this.thrusts = []; this.spirits = []; this.pools = []; }
+  constructor() { this.slashes = []; this.rings = []; this.texts = []; this.bolts = []; this.thrusts = []; this.spirits = []; this.pools = []; this.pulls = []; this.roars = []; this.quakes = []; this.rises = []; this.halos = []; this.crags = []; this.splashes = []; this.ghostsUp = []; }
   // a shimmering golden pool on the ground (staff: Sacred Pool)
   pool(x, y, radius, dur) { this.pools.push({ x, y, radius, t: 0, dur }); }
 
@@ -225,6 +225,206 @@ export class Effects {
   thrust(x, y, dx, dy, len, color, width = 6, dur = 0.14, z = 0.6) {
     this.thrusts.push({ x, y, dx, dy, len, color, width, t: 0, dur, z });
   }
+  // kunai pulled out of an enemy: a steel splash bursts from the body, the kunai spin out and fly back to the
+  // player's hand (to = the player, followed while they fly)
+  kunaiPull(x, y, to, n) {
+    const base = Math.atan2(to.y - y, to.x - x) + Math.PI;
+    const knives = [];
+    for (let i = 0; i < n; i++) {
+      const a = base + (n === 1 ? 0 : (i / (n - 1) - 0.5) * 2.4) + rand(-0.25, 0.25);
+      knives.push({ a, out: rand(1.2, 1.8), up: rand(0.6, 1.2), spin: rand(16, 24) * (Math.random() < 0.5 ? -1 : 1), d: i * 0.025 });
+    }
+    const rays = [];
+    for (let i = 0; i < 18; i++) rays.push({ a: (i / 18) * TAU + rand(-0.12, 0.12), l: rand(0.7, 1.4), w: rand(2.5, 5.5) });
+    const drops = [];
+    for (let i = 0; i < 16; i++) drops.push({ a: rand(0, TAU), v: rand(1.6, 3.2), up: rand(1.4, 3.0), s: rand(2.5, 4.5) });
+    this.pulls.push({ x, y, to, knives, rays, drops, t: 0, dur: 0.6 });
+  }
+  drawPulls(ctx) {
+    if (!this.pulls.length) return;
+    ctx.save(); ctx.lineCap = 'round';
+    for (const P of this.pulls) {
+      const t = P.t, cx = isoX(P.x, P.y), cy = isoY(P.x, P.y, 0.6);
+      // the splash: a white flash and steel-blue spikes thrown out in the ground plane
+      if (t < 0.22) {
+        const k = t / 0.22;
+        ctx.save(); ctx.globalCompositeOperation = 'lighter';
+        const fr = 46 * (0.5 + k);
+        const gr = ctx.createRadialGradient(cx, cy, 0, cx, cy, fr);
+        gr.addColorStop(0, `rgba(255,255,255,${0.9 * (1 - k)})`); gr.addColorStop(0.4, `rgba(190,225,255,${0.5 * (1 - k)})`); gr.addColorStop(1, 'rgba(120,170,255,0)');
+        ctx.fillStyle = gr; ctx.beginPath(); ctx.arc(cx, cy, fr, 0, TAU); ctx.fill();
+        ctx.translate(cx, cy); ctx.scale(1, 0.6);
+        for (const R of P.rays) {
+          const r0 = 12 + 56 * R.l * ease.outCubic(k), r1 = r0 + 34 * R.l * (1 - k);
+          ctx.strokeStyle = `rgba(225,240,255,${1 - k})`; ctx.lineWidth = R.w * (1 - k * 0.7);
+          ctx.beginPath(); ctx.moveTo(Math.cos(R.a) * r0, Math.sin(R.a) * r0); ctx.lineTo(Math.cos(R.a) * r1, Math.sin(R.a) * r1); ctx.stroke();
+        }
+        ctx.restore();
+      }
+      // flung droplets of light that fall back under gravity
+      for (const D of P.drops) {
+        const k = t / P.dur; if (k > 0.7) continue;
+        const dx = Math.cos(D.a) * D.v * t, dy = Math.sin(D.a) * D.v * t, z = 0.6 + D.up * t - 6 * t * t;
+        if (z < 0) continue;
+        ctx.fillStyle = `rgba(220,236,255,${1 - k / 0.7})`;
+        ctx.beginPath(); ctx.arc(isoX(P.x + dx, P.y + dy), isoY(P.x + dx, P.y + dy, z), D.s * (1 - k * 0.6), 0, TAU); ctx.fill();
+      }
+      // the kunai: spin out of the body, hang for a beat, then whip back into the player's hand
+      for (const K of P.knives) {
+        const lt = t - K.d; if (lt < 0) continue;
+        const out = Math.min(1, lt / 0.16), back = clamp((lt - 0.2) / 0.26, 0, 1);
+        if (back >= 1) continue;
+        const ox = P.x + Math.cos(K.a) * K.out * ease.outCubic(out), oy = P.y + Math.sin(K.a) * K.out * ease.outCubic(out), oz = 0.6 + K.up * Math.sin(out * Math.PI * 0.5);
+        const e = ease.inQuad(back), tx = P.to.x, ty = P.to.y, tz = 0.7;
+        const wx = ox + (tx - ox) * e, wy = oy + (ty - oy) * e, wz = oz + (tz - oz) * e + Math.sin(back * Math.PI) * 0.4;
+        const sx = isoX(wx, wy), sy = isoY(wx, wy, wz);
+        let rot;
+        if (back > 0) { const hx = isoX(tx, ty), hy = isoY(tx, ty, tz); rot = Math.atan2(hy - sy, hx - sx); } else rot = K.a + lt * K.spin; // ring first, back into the hand
+        // a streak behind it on the way back
+        if (back > 0) {
+          ctx.strokeStyle = `rgba(200,225,255,${0.55 * (1 - back)})`; ctx.lineWidth = 3;
+          ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(sx - Math.cos(rot) * 26, sy - Math.sin(rot) * 26); ctx.stroke();
+        }
+        ctx.save(); ctx.translate(sx, sy); ctx.rotate(rot); ctx.scale(0.9, 0.9); // (about the size of a thrown / stuck kunai)
+        ctx.fillStyle = '#dfe8f2'; ctx.strokeStyle = '#1c1820'; ctx.lineWidth = 1.2;
+        ctx.beginPath(); ctx.moveTo(-11, 0); ctx.lineTo(-2, -3.2); ctx.lineTo(1, 0); ctx.lineTo(-2, 3.2); ctx.closePath(); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = '#3a2a2a'; ctx.fillRect(1, -1.2, 7, 2.4);
+        ctx.beginPath(); ctx.arc(10, 0, 2.2, 0, TAU); ctx.stroke();
+        ctx.restore();
+      }
+      // a glint where they land in the hand
+      const last = Math.max(...P.knives.map((K) => K.d)) + 0.46;
+      if (t > last - 0.06 && t < last + 0.12) {
+        const k = (t - last + 0.06) / 0.18, hx = isoX(P.to.x, P.to.y), hy = isoY(P.to.x, P.to.y, 0.7);
+        ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.strokeStyle = `rgba(255,250,220,${1 - k})`; ctx.lineWidth = 2;
+        const L = 8 + 14 * k;
+        ctx.beginPath(); ctx.moveTo(hx - L, hy); ctx.lineTo(hx + L, hy); ctx.moveTo(hx, hy - L); ctx.lineTo(hx, hy + L); ctx.stroke();
+        ctx.restore();
+      }
+    }
+    ctx.restore();
+  }
+  // the Shishi shield's Bulwark release: a lion's mane of gold spikes bursting outward (its own look, no other weapon's)
+  roar(x, y, r, dur = 0.7) { this.roars.push({ x, y, r, t: 0, dur, rot: rand(0, TAU) }); }
+  // the Earth Shaper's gloves: jagged cracks splitting the ground out to r (seeded per quake)
+  quake(x, y, r, dur = 0.9) {
+    const cracks = [];
+    const n = Math.max(6, Math.round(5 + r * 1.5));
+    for (let i = 0; i < n; i++) { const a = (i / n) * TAU + rand(-0.2, 0.2), pts = []; let d = 0; while (d < r) { d = Math.min(r, d + rand(0.3, 0.6) * Math.max(1, r / 3)); pts.push([a + rand(-0.18, 0.18), d]); } cracks.push(pts); }
+    this.quakes.push({ x, y, r, t: 0, dur, cracks });
+  }
+  // the holy staff's Halo Sweep: a thin band of gold light sweeping a narrow arc far out in front (side = sweep direction)
+  halo(x, y, ang, range, arcDeg, side = 1, dur = 0.4, inner = 0.25) { this.halos.push({ x, y, ang, range, arc: arcDeg * Math.PI / 180, side, t: 0, dur, inner }); } // inner: where the band starts (share of range)
+  // the spirit orb breaking: little ghosts fly up out of where it shattered, swaying, and fade away
+  ghosts(x, y, r, n = 6, dur = 1.3) { for (let i = 0; i < n; i++) { const a = rand(0, TAU), d = rand(0.1, r); this.ghostsUp.push({ x: x + Math.cos(a) * d, y: y + Math.sin(a) * d, t: -rand(0, 0.25), dur: dur * rand(0.8, 1.15), ph: rand(0, TAU), s: rand(0.75, 1.15), drift: rand(-14, 14) }); } }
+  // the gloves' Rising Crag: a great dark slab of rock bursting out of the ground at an angle along (ux, uy)
+  crag(x, y, ux, uy, dur = 1.1) { this.crags.push({ x, y, ux, uy, t: 0, dur, seed: rand(0, 9) }); }
+  // the spirit orb's Soul Drop: a pale splash of souls on the ground, rippling out, with wisps curling up
+  soulSplash(x, y, r, dur = 0.7) { this.splashes.push({ x, y, r, t: 0, dur, rot: rand(0, TAU) }); }
+  // the gloves' rock breaking up out of the ground before the punch
+  rise(x, y, dur = 0.32) { this.rises.push({ x, y, t: 0, dur, seed: rand(0, 9) }); }
+  drawEarth(ctx) {
+    for (const G of this.ghostsUp) { // a round head, two dark eyes and a curling tail, rising and fading
+      if (G.t < 0) continue;
+      const k = G.t / G.dur, a = k < 0.15 ? k / 0.15 : 1 - (k - 0.15) / 0.85;
+      const sx = isoX(G.x, G.y) + Math.sin(G.ph + k * 7) * 6 + G.drift * k, sy = isoY(G.x, G.y, 0.3) - 70 * ease.outQuad(k), R = 6.5 * G.s;
+      ctx.save(); ctx.translate(sx, sy); ctx.globalAlpha *= Math.max(0, a) * 0.85;
+      ctx.globalCompositeOperation = 'lighter';
+      const gl = ctx.createRadialGradient(0, 0, 0, 0, 0, R * 2.4); gl.addColorStop(0, 'rgba(170,220,255,0.45)'); gl.addColorStop(1, 'rgba(120,180,255,0)');
+      ctx.fillStyle = gl; ctx.beginPath(); ctx.arc(0, 0, R * 2.4, 0, TAU); ctx.fill();
+      ctx.globalCompositeOperation = 'source-over';
+      const sw = Math.sin(G.ph + k * 12) * R * 0.6;
+      ctx.fillStyle = 'rgba(232,246,255,0.92)';
+      ctx.beginPath(); ctx.arc(0, 0, R, Math.PI, 0); ctx.quadraticCurveTo(R, R * 1.2, sw + R * 0.3, R * 2.4); ctx.quadraticCurveTo(sw - R * 0.2, R * 1.5, -R, R * 0.3); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = 'rgba(30,40,70,0.85)'; ctx.beginPath(); ctx.ellipse(-R * 0.35, -R * 0.1, R * 0.17, R * 0.24, 0, 0, TAU); ctx.ellipse(R * 0.35, -R * 0.1, R * 0.17, R * 0.24, 0, 0, TAU); ctx.fill();
+      ctx.restore();
+    }
+    for (const H of this.halos) { // drawn on the ground plane: a crescent band with a bright leading edge
+      const k = H.t / H.dur, sweep = ease.outCubic(Math.min(1, k / 0.45)), a = 1 - Math.max(0, (k - 0.35) / 0.65);
+      ctx.save(); ctx.translate(isoX(H.x, H.y), isoY(H.x, H.y, 0.5)); ctx.scale(1, 0.5); ctx.rotate(Math.PI / 4 + H.ang);
+      const R = H.range * 45.25, h = H.arc / 2, from = -h * H.side, to = from + H.arc * H.side * sweep;
+      const a0 = Math.min(from, to), a1 = Math.max(from, to);
+      ctx.globalCompositeOperation = 'lighter';
+      const R0 = R * (H.inner ?? 0.25), g2 = ctx.createRadialGradient(0, 0, R0, 0, 0, R);
+      g2.addColorStop(0, 'rgba(255,230,150,0)'); g2.addColorStop(0.75, `rgba(255,226,140,${0.28 * a})`); g2.addColorStop(1, `rgba(255,248,220,${0.55 * a})`);
+      ctx.fillStyle = g2; ctx.beginPath(); ctx.moveTo(Math.cos(a0) * R0, Math.sin(a0) * R0); ctx.arc(0, 0, R, a0, a1); ctx.arc(0, 0, R0, a1, a0, true); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = `rgba(255,250,225,${0.9 * a})`; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(Math.cos(to) * R0, Math.sin(to) * R0); ctx.lineTo(Math.cos(to) * R, Math.sin(to) * R); ctx.stroke();
+      ctx.strokeStyle = `rgba(255,226,140,${0.35 * a})`; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(0, 0, R0, a0, a1); ctx.stroke(); // the inner edge of the band
+      ctx.strokeStyle = `rgba(255,214,120,${0.7 * a})`; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(0, 0, R, a0, a1); ctx.stroke();
+      for (let q = 0; q < 5; q++) { const aa = a0 + (a1 - a0) * (q + 0.5) / 5, rr = R0 + (R - R0) * (0.2 + 0.7 * ((q * 7) % 5) / 5); ctx.fillStyle = `rgba(255,250,230,${0.8 * a})`; ctx.beginPath(); ctx.arc(Math.cos(aa) * rr, Math.sin(aa) * rr, 2.2, 0, TAU); ctx.fill(); } // motes of light
+      ctx.restore();
+    }
+    for (const C of this.crags) { // a slab of dark rock leaning toward the enemy, rising fast, then crumbling away
+      const k = C.t / C.dur, up = ease.outBack ? ease.outBack(Math.min(1, C.t / 0.14)) : ease.outCubic(Math.min(1, C.t / 0.14)), fall = k > 0.7 ? (k - 0.7) / 0.3 : 0;
+      const sx = isoX(C.x, C.y), sy = isoY(C.x, C.y), dir = Math.atan2(isoY(C.x + C.ux, C.y + C.uy) - isoY(C.x, C.y), isoX(C.x + C.ux, C.y + C.uy) - sx);
+      const lean = Math.cos(dir) >= 0 ? 0.6 : -0.6, H = 62 * up * (1 - fall * 0.6), W = 22;
+      ctx.save(); ctx.translate(sx, sy); ctx.globalAlpha *= 1 - fall;
+      // the ground it tore open: a dark hole, then a raised lip of earth behind the rock
+      ctx.fillStyle = 'rgba(30,18,10,0.75)'; ctx.beginPath(); ctx.ellipse(0, 0, W * 1.25, W * 0.5, 0, 0, TAU); ctx.fill();
+      ctx.fillStyle = '#5a3c22'; ctx.beginPath(); ctx.ellipse(0, -2, W * 1.3, W * 0.42, 0, Math.PI, TAU); ctx.ellipse(0, -2, W * 0.95, W * 0.28, 0, TAU, Math.PI, true); ctx.fill();
+      ctx.save(); ctx.translate(0, fall * 12); // (it sinks back into the hole as it crumbles)
+      ctx.beginPath(); ctx.rect(-W * 3, -H * 2, W * 6, H * 2 + 3); ctx.clip(); // nothing of it below the ground line
+      ctx.transform(1, 0, -lean, 1, 0, 0); // lean toward the enemy, the base flat on the floor
+      const pts = [[-W, 0], [-W * 0.8, -H * 0.45], [-W * 0.35, -H * 0.9], [W * 0.05, -H], [W * 0.5, -H * 0.62], [W * 0.75, -H * 0.2], [W, 0]];
+      ctx.beginPath(); pts.forEach(([px, py], i) => (i ? ctx.lineTo(px, py) : ctx.moveTo(px, py))); ctx.closePath();
+      const gr = ctx.createLinearGradient(-W, 0, W, -H); gr.addColorStop(0, '#2e1c10'); gr.addColorStop(0.55, '#4a2f1a'); gr.addColorStop(1, '#6a4428');
+      ctx.fillStyle = gr; ctx.fill(); ctx.strokeStyle = '#140c08'; ctx.lineWidth = 2; ctx.stroke();
+      ctx.strokeStyle = 'rgba(150,100,60,0.55)'; ctx.lineWidth = 1.4; // a few cracks and a lit edge
+      ctx.beginPath(); ctx.moveTo(-W * 0.3, -H * 0.2); ctx.lineTo(-W * 0.05, -H * 0.5); ctx.lineTo(-W * 0.2, -H * 0.72); ctx.moveTo(W * 0.3, -H * 0.15); ctx.lineTo(W * 0.15, -H * 0.4); ctx.stroke();
+      ctx.strokeStyle = 'rgba(190,140,90,0.6)'; ctx.beginPath(); ctx.moveTo(-W * 0.35, -H * 0.9); ctx.lineTo(W * 0.05, -H); ctx.lineTo(W * 0.5, -H * 0.62); ctx.stroke();
+      ctx.restore();
+      // the near lip of the hole and loose rubble heaped against the foot of the rock
+      ctx.fillStyle = '#6a4828'; ctx.beginPath(); ctx.ellipse(0, 1, W * 1.3, W * 0.45, 0, 0, Math.PI); ctx.ellipse(0, 1, W * 1.0, W * 0.3, 0, Math.PI, 0, true); ctx.fill();
+      ctx.strokeStyle = '#140c08'; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.ellipse(0, 1, W * 1.3, W * 0.45, 0, 0, Math.PI); ctx.stroke();
+      for (let q = 0; q < 7; q++) { const a = (q / 7) * Math.PI + 0.2, rx = Math.cos(a) * W * (1.05 + 0.25 * ((q * 5) % 3) / 2), ry = Math.sin(a) * W * 0.42 + 2, rr = 2.5 + ((q * 7 + C.seed * 3) % 3);
+        ctx.fillStyle = q % 2 ? '#4a2f1a' : '#7a5634'; ctx.beginPath(); ctx.ellipse(rx, ry, rr * 1.3, rr, 0, 0, TAU); ctx.fill(); ctx.strokeStyle = '#140c08'; ctx.lineWidth = 0.8; ctx.stroke(); }
+      ctx.restore();
+    }
+    for (const R of this.rises) {
+      const k = Math.min(1, R.t / R.dur), sx = isoX(R.x, R.y), sy = isoY(R.x, R.y, 0.15 + 0.55 * ease.outCubic(k)), s = 0.5 + 0.5 * k;
+      ctx.save(); ctx.translate(sx, sy); ctx.scale(s, s); ctx.rotate(R.seed + k * 0.6);
+      ctx.beginPath(); for (let q = 0; q < 7; q++) { const a = (q / 7) * TAU, rr = 10 * (0.78 + 0.22 * ((q * 3) % 4) / 3); q ? ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr) : ctx.moveTo(Math.cos(a) * rr, Math.sin(a) * rr); } ctx.closePath();
+      ctx.fillStyle = '#5a3a22'; ctx.fill(); ctx.strokeStyle = '#1a1420'; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.restore();
+    }
+    for (const Rr of this.roars) {
+      const k = Rr.t / Rr.dur, e = ease.outCubic(k), a = 1 - k, sx = isoX(Rr.x, Rr.y), sy = isoY(Rr.x, Rr.y, 0.3);
+      ctx.save(); ctx.translate(sx, sy); ctx.scale(1, 0.55); ctx.globalCompositeOperation = 'lighter';
+      const R0 = Rr.r * 45.25 * (0.25 + 0.75 * e), n = 18;
+      for (let i = 0; i < n; i++) { // the mane: long gold spikes with crimson-gold tips
+        const ang = Rr.rot + (i / n) * TAU + k * 0.4, L = R0 * (i % 2 ? 0.75 : 1), w = 0.12;
+        ctx.fillStyle = `rgba(255,196,90,${0.75 * a})`;
+        ctx.beginPath(); ctx.moveTo(Math.cos(ang - w) * L * 0.35, Math.sin(ang - w) * L * 0.35); ctx.lineTo(Math.cos(ang) * L, Math.sin(ang) * L); ctx.lineTo(Math.cos(ang + w) * L * 0.35, Math.sin(ang + w) * L * 0.35); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = `rgba(255,110,60,${0.6 * a})`; ctx.beginPath(); ctx.arc(Math.cos(ang) * L, Math.sin(ang) * L, 4, 0, TAU); ctx.fill();
+      }
+      const gr = ctx.createRadialGradient(0, 0, 0, 0, 0, R0 * 0.5); gr.addColorStop(0, `rgba(255,236,170,${0.7 * a})`); gr.addColorStop(1, 'rgba(255,180,80,0)');
+      ctx.fillStyle = gr; ctx.beginPath(); ctx.arc(0, 0, R0 * 0.5, 0, TAU); ctx.fill();
+      ctx.restore();
+    }
+  }
+  drawQuakes(ctx) {
+    for (const P of this.splashes) { // pale rings rippling out from where the orb struck, souls curling up off them
+      const k = P.t / P.dur, e = ease.outCubic(k), a = 1 - k;
+      ctx.save(); ctx.translate(isoX(P.x, P.y), isoY(P.x, P.y)); ctx.scale(1, 0.5);
+      const R = P.r * 45.25;
+      for (let i = 0; i < 3; i++) { const rr = R * Math.min(1, e * (1 - i * 0.18)); ctx.strokeStyle = `rgba(170,220,255,${(0.75 - i * 0.2) * a})`; ctx.lineWidth = 4 - i; ctx.setLineDash([10 - i * 2, 6]); ctx.lineDashOffset = P.rot * 20 + k * 40 * (i % 2 ? -1 : 1); ctx.beginPath(); ctx.arc(0, 0, rr, 0, TAU); ctx.stroke(); }
+      ctx.setLineDash([]);
+      const gr = ctx.createRadialGradient(0, 0, 0, 0, 0, R * e); gr.addColorStop(0, `rgba(210,240,255,${0.35 * a})`); gr.addColorStop(1, 'rgba(120,180,240,0)');
+      ctx.fillStyle = gr; ctx.beginPath(); ctx.arc(0, 0, R * e, 0, TAU); ctx.fill();
+      ctx.restore();
+    }
+    for (const Q of this.quakes) {
+      const k = Q.t / Q.dur, grow = Math.min(1, Q.t / 0.18), a = k < 0.6 ? 1 : 1 - (k - 0.6) / 0.4;
+      ctx.save(); ctx.translate(isoX(Q.x, Q.y), isoY(Q.x, Q.y)); ctx.scale(1, 0.5); ctx.rotate(Math.PI / 4);
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      for (const [lw, col] of [[4.5, `rgba(40,24,12,${0.7 * a})`], [1.6, `rgba(200,140,80,${0.55 * a})`]]) {
+        ctx.strokeStyle = col; ctx.lineWidth = lw; ctx.beginPath();
+        for (const pts of Q.cracks) { ctx.moveTo(0, 0); for (const [ang, d] of pts) { if (d > Q.r * grow) break; ctx.lineTo(Math.cos(ang) * d * 45.25, Math.sin(ang) * d * 45.25); } }
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+  }
   ring(x, y, radius, color, dur = 0.4, width = 6) {
     this.rings.push({ x, y, radius, color, t: 0, dur, width });
   }
@@ -233,7 +433,7 @@ export class Effects {
   }
 
   update(dt) {
-    for (const arr of [this.slashes, this.rings, this.texts, this.bolts, this.thrusts, this.spirits, this.pools]) {
+    for (const arr of [this.slashes, this.rings, this.texts, this.bolts, this.thrusts, this.spirits, this.pools, this.pulls, this.roars, this.quakes, this.rises, this.halos, this.crags, this.splashes, this.ghostsUp]) {
       for (let i = arr.length - 1; i >= 0; i--) { arr[i].t += dt; if (arr[i].t >= arr[i].dur) arr.splice(i, 1); }
     }
   }

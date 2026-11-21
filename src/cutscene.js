@@ -9,12 +9,14 @@ import { storyLines, GENSAI_PAL, KAGERO_PAL } from './story.js';
 import { RIG_WEAPON } from './player.js';
 import { Motes, fog, lightShafts, vignette, glow, hangingLantern, nobori, stoneLantern, figure, crow, flyingBird, bat, cat, flitter, lightning, hsh } from './cutfx.js';
 
-// a player's chosen weapons on their cutscene figure: the first in hand, the second stowed on the back
+// a player's chosen weapon on their cutscene figure (one weapon per run: nothing on the back)
 export function weaponRig(p) {
   if (!p || !p.weapons) return {};
   const a = RIG_WEAPON[p.weapons[0].key], b = p.weapons[1] && RIG_WEAPON[p.weapons[1].key];
-  return { weapon: a.weapon, weapon2: a.weapon2, grip: a.grip, backWeapon: b ? b.back : null };
+  return { weapon: a.weapon, weapon2: a.weapon2, grip: a.grip, backWeapon: b ? b.back : null, ...lookRig(p) };
 }
+// a player's equipment look on their cutscene figure (colours and gear of their set)
+export function lookRig(p) { return p && p.equip && p.equip !== 'default' ? { pal: p.pal, gear: p.equip } : {}; }
 
 export const PALS = [
   { skin: '#f1c9a5', cloth: '#2c3a5e', cloth2: '#1d2742', sash: '#c0392b', hood: '#232c46', scarf: '#d63a3a', metal: '#e6edf5', wood: '#7a4e2a', accent: '#c0392b' },
@@ -50,8 +52,8 @@ export class IntroCutscene {
     A.push(this.actor({ id: 'g2', x: 0.72, y: -0.05, facing: Math.PI, rig: { pal: KAGERO_PAL, head: 'jingasa', weapon: 'spear', grip: 'pole' } }));
     A.push(this.guardL = this.actor({ id: 'g3', x: 0.12, y: 0.02, facing: 0, rig: { pal: KAGERO_PAL, head: 'jingasa', weapon: 'spear', grip: 'pole' } }));
     A.push(this.guardR = this.actor({ id: 'g4', x: 0.2, y: 0.03, facing: 0, rig: { pal: KAGERO_PAL, head: 'jingasa', weapon: 'spear', grip: 'pole' } }));
-    A.push(this.kage = this.actor({ id: 'kage', x: 0.4, y: 0.04, facing: 0, rig: { pal: PALS[0], head: 'hood', scarf: true }, pose: { kind: 'kneel', t: 0 } }));
-    if (this.coop) A.push(this.kaze = this.actor({ id: 'kaze', x: 0.31, y: 0.05, facing: 0, rig: { pal: PALS[1], head: 'hood', scarf: true }, pose: { kind: 'kneel', t: 0 } }));
+    A.push(this.kage = this.actor({ id: 'kage', x: 0.4, y: 0.04, facing: 0, rig: { pal: PALS[0], head: 'hood', scarf: true, ...lookRig(this.g.players[0]) }, pose: { kind: 'kneel', t: 0 } }));
+    if (this.coop) A.push(this.kaze = this.actor({ id: 'kaze', x: 0.31, y: 0.05, facing: 0, rig: { pal: PALS[1], head: 'hood', scarf: true, ...lookRig(this.g.players[1]) }, pose: { kind: 'kneel', t: 0 } }));
     this.actors = A;
   }
 
@@ -60,8 +62,8 @@ export class IntroCutscene {
     A.push(this.captain = this.actor({ id: 'captain', x: 0.62, y: 0.02, facing: Math.PI, rig: { pal: KAGERO_PAL, head: 'kabuto', armor: true, weapon: 'naginata', grip: 'pole' }, s: 2.45 }));
     A.push(this.actor({ id: 's1', x: 0.72, y: -0.01, facing: Math.PI, rig: { pal: KAGERO_PAL, head: 'jingasa', weapon: 'spear', grip: 'pole' } }));
     A.push(this.actor({ id: 's2', x: 0.79, y: 0.03, facing: Math.PI, rig: { pal: KAGERO_PAL, head: 'jingasa', weapon: 'spear', grip: 'pole' } }));
-    A.push(this.kage = this.actor({ id: 'kage', x: 0.44, y: 0.05, facing: 0, rig: { pal: PALS[0], head: 'hood', scarf: true }, pose: { kind: 'kneel', t: 0.6 } }));
-    if (this.coop) A.push(this.kaze = this.actor({ id: 'kaze', x: 0.35, y: 0.06, facing: 0, rig: { pal: PALS[1], head: 'hood', scarf: true }, pose: { kind: 'kneel', t: 0.6 } }));
+    A.push(this.kage = this.actor({ id: 'kage', x: 0.44, y: 0.05, facing: 0, rig: { pal: PALS[0], head: 'hood', scarf: true, ...lookRig(this.g.players[0]) }, pose: { kind: 'kneel', t: 0.6 } }));
+    if (this.coop) A.push(this.kaze = this.actor({ id: 'kaze', x: 0.35, y: 0.06, facing: 0, rig: { pal: PALS[1], head: 'hood', scarf: true, ...lookRig(this.g.players[1]) }, pose: { kind: 'kneel', t: 0.6 } }));
     this.actors = A;
   }
 

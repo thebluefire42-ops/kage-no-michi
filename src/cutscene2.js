@@ -23,6 +23,22 @@ const SPRING = { skyTop: '#a9cfe3', skyBot: '#efe7cf', mtn: ['#9db6c2', '#7d9aa8
 const AUTUMN = { skyTop: '#e8a87a', skyBot: '#f5dcc0', mtn: ['#b0705e', '#8a5048'], hill: '#9a6a3a', grass: '#ad9550', grassDark: '#7f6a34', path: '#a49a8a', pathEdge: '#7f776a', tuft: '#9a8040' };
 const LEAVES = ['#d8452a', '#e8742a', '#f0a830', '#c8302a', '#b83a20'];
 const BLEND0 = 0.95, BLEND1 = 1.9; // world x where spring turns into autumn
+// a falling leaf (s = size): half of them maple leaves (rounded lobes, a stem, a darker vein), half long leaves
+function drawFallingLeaf(ctx, p, s) {
+  const col = p.col;
+  if ((p.ph * 10) % 2 < 1) { // maple: five rounded lobes around a centre
+    ctx.beginPath();
+    const lobes = [[-Math.PI / 2, 6.2], [-Math.PI / 2 + 1.15, 5.2], [-Math.PI / 2 - 1.15, 5.2], [Math.PI / 2 - 0.7, 3.6], [Math.PI / 2 + 0.7, 3.6]];
+    for (const [a, r] of lobes) { const x = Math.cos(a) * r * 0.62 * s, y = Math.sin(a) * r * 0.62 * s; ctx.moveTo(x + 2.1 * s, y); ctx.arc(x, y, 2.1 * s, 0, TAU); }
+    ctx.moveTo(2.4 * s, 0); ctx.arc(0, 0, 2.4 * s, 0, TAU);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(80,20,10,0.5)'; ctx.lineWidth = 0.7 * s; ctx.beginPath(); ctx.moveTo(0, 3.5 * s); ctx.lineTo(0, 6 * s); ctx.stroke(); // the stem
+  } else { // a long leaf with a pointed tip and a midrib
+    ctx.beginPath(); ctx.moveTo(0, -5.5 * s); ctx.quadraticCurveTo(3.6 * s, -1 * s, 0, 5 * s); ctx.quadraticCurveTo(-3.6 * s, -1 * s, 0, -5.5 * s); ctx.fill();
+    ctx.strokeStyle = 'rgba(90,30,10,0.45)'; ctx.lineWidth = 0.6 * s; ctx.beginPath(); ctx.moveTo(0, -4.5 * s); ctx.lineTo(0, 6 * s); ctx.stroke();
+  }
+  ctx.fillStyle = col;
+}
 
 const hexRgb = (c) => [parseInt(c.slice(1, 3), 16), parseInt(c.slice(3, 5), 16), parseInt(c.slice(5, 7), 16)];
 const mix = (a, b, t) => { const A = hexRgb(a), B = hexRgb(b); return `rgb(${A.map((v, i) => Math.round(lerp(v, B[i], t))).join(',')})`; };
@@ -32,7 +48,7 @@ const pal = (key, x) => mix(SPRING[key], AUTUMN[key], blendAt(x));
 
 export class Area2Cutscene {
   constructor(g, onDone, opts = {}) {
-    this.id = 'area2'; this.song = 'biome_2_chill';
+    this.id = 'area2'; this.song = 'biome_2';
     this.g = g; this.onDone = onDone; this.t = 0; this.remote = !!opts.remote;
     this.coop = g.players.length > 1;
     this.fade = 1; this.titleT = -1; this.done = false; this.outT = -1; this.walking = true;
@@ -304,13 +320,6 @@ export class Area2Cutscene {
     if (mx > -40 && mx < W + 40) figure(ctx, mx, my, 18 * k, 'monk', t, { walk: true, dir: 1, col: `rgba(50,36,40,${0.55 + b * 0.2})` });
     if (b > 0.15) {
       ctx.save(); ctx.globalAlpha = clamp((b - 0.15) * 2, 0, 1);
-      // a thin waterfall down the red cliffs, with spray
-      const wx = far(1.45), wy = gy - 150 * k;
-      if (wx > -60 && wx < W + 60) {
-        ctx.fillStyle = 'rgba(220,236,240,0.6)'; ctx.fillRect(wx - 4 * k, wy, 8 * k, 110 * k);
-        ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.lineWidth = 1.2 * k; for (let i = 0; i < 4; i++) { const yy = wy + ((t * 60 + i * 28) % 110) * k; ctx.beginPath(); ctx.moveTo(wx - 3 * k, yy); ctx.lineTo(wx - 3 * k, yy + 10 * k); ctx.stroke(); }
-        fog(ctx, W, H, k, t, wy + 112 * k, 20 * k, '240,246,250', 0.35, 3, 41, 2);
-      }
       // an old torii half in the trees
       const tx = far(1.22), ty = gy - 40 * k;
       if (tx > -60 && tx < W + 60) {
@@ -331,7 +340,7 @@ export class Area2Cutscene {
     for (let i = i0; i <= i1; i++) {
       const lx = i * spacing + hsh(i, p) * spacing * 0.8;
       const s = lx - off; // screen fraction
-      const wx = this.cam + s * (1 + (1 - p) * 1.6); // trees ahead turn autumn a little before you reach them
+      const wx = lx / p + 0.5 + (1 - p) * 0.8; // the tree's own spot in the world (the far rows turn a little early)
       const tb = blendAt(wx);
       if (hsh(i, p + 1) > sparse + (1 - sparse) * tb) continue; // the fields are open; the pass is forest
       const kind = hsh(i, p + 2) < tb ? (hsh(i, p + 3) < 0.22 ? 'ginkgo' : 'maple') : hsh(i, p + 4) < 0.6 ? 'cherry' : 'green';
@@ -469,11 +478,8 @@ export class Area2Cutscene {
     for (const p of this.leaves) {
       ctx.save(); ctx.translate(p.x * W, p.y * H); ctx.rotate(p.rot); ctx.scale(1, Math.abs(Math.cos(p.t * 3 + p.ph)) * 0.8 + 0.2);
       ctx.fillStyle = p.col;
-      if (p.kind === 'leaf') { // a little five-pointed maple leaf
-        ctx.beginPath();
-        for (let j = 0; j < 10; j++) { const r = (j % 2 ? 2.2 : 5.5) * k * p.s, a = (j / 10) * TAU - Math.PI / 2; ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r); }
-        ctx.closePath(); ctx.fill();
-      } else { ctx.beginPath(); ctx.ellipse(0, 0, 3.4 * k * p.s, 2.2 * k * p.s, 0, 0, TAU); ctx.fill(); }
+      if (p.kind === 'leaf') drawFallingLeaf(ctx, p, k * p.s);
+      else { ctx.beginPath(); ctx.ellipse(0, 0, 3.4 * k * p.s, 2.2 * k * p.s, 0, 0, TAU); ctx.fill(); }
       ctx.restore();
     }
   }

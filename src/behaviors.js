@@ -1,24 +1,31 @@
 // Enemy AI (shared behaviour types + heavy abilities + bosses) and per-enemy looks.
 import { TAU, clamp, lerp, rand, pick, angDiff } from './util.js';
-import { BOSS_DMG, PLAYER_STUN, GENSAI_GUARD, SUMO, PLAYER_BASE } from './config.js';
+import { BOSS_DMG, PLAYER_STUN, GENSAI_GUARD, SUMO, PLAYER_BASE, SWEEP, BANNER, COOP_ENEMY_COUNT, BIOME_POOLS, ENEMIES, laneW, ARROW_HALF } from './config.js';
 import { sfx } from './audio.js';
-import { Enemy, slamAt } from './enemies.js';
-import { drawKappa } from './rig.js';
+import { Enemy, slamAt, MIRAGE_W } from './enemies.js';
+import { drawKappa, drawHumanoid } from './rig.js';
 // Kurogane's band: who he calls in (plain soldiers throughout, heavies only once he rages)
 const KURO_ADDS = ['bandit', 'bandit', 'spear', 'archer', 'tate'];
 const KURO_HEAVY = ['sumo', 'samurai'];
-import { drawWeasel, drawTanuki, drawBoar, drawKomainu, drawWisp, drawGasha, drawDummy } from './creatures.js';
+// Shuten (area 3 boss): from phase 2 he raises the area's own dead and demons (never its heavies), every SHUTEN_ADDS.cd[phase] s
+const SHUTEN_ADDS = { cd: [0, 0, 12, 9], n: 2, max: 6 };
+// Shuten's attacks reach this much further than before (2026-11-21); every telegraph grows with its hit area
+const SA = 1.3;
+import { drawWeasel, drawTanuki, drawBoar, drawKomainu, drawWisp, drawGasha, drawDummy, drawSwallow } from './creatures.js';
 
 const slashA = (wx, wy) => Math.atan2(((wx + wy) * 16) / 0.55, (wx - wy) * 32);
 const ringHazard = (g, x, y, max, dmg, speed = 8) => g.hazards.push({ kind: 'ring', x, y, rad: 0.5, speed, max, width: 0.45, dmg, hit: false, gap: null });
+const isArrow = (e) => { const k = e.cfg.proj || 'arrow'; return k === 'arrow' || k === 'icearrow'; }; // an archer's arrow: the thin lane
 const levelInBiome = (g) => ((g.level - 1) % 10) + 1;
+// co-op: every group of regular enemies is COOP_ENEMY_COUNT (x1.4) as big
+const coopCount = (g, n) => (g.players.length > 1 ? Math.round(n * COOP_ENEMY_COUNT) : n);
 
 // ================================================================ shared behaviour types
 function meleeThink(e, dt, g, arc = 1.9) {
-  const [dx, dy, d] = e.toPlayer();
+  const [dx, dy, d] = e.toPlayer(), R = e.cfg.range * SWEEP.range;
   e.face(dx, dy);
-  if (d < e.cfg.range * 0.85 && e.atkCd <= 0) {
-    e.windup(e.cfg.windup, { kind: 'arc', range: e.cfg.range + 0.2, arc, angle: Math.atan2(dy, dx) });
+  if (d < R * 0.85 && e.atkCd <= 0) {
+    e.windup(e.cfg.windup, { kind: 'arc', range: R + 0.2, arc, angle: Math.atan2(dy, dx) });
     return;
   }
   let mx = dx, my = dy;
@@ -28,6 +35,7 @@ function meleeThink(e, dt, g, arc = 1.9) {
 
 const SMOKE = { assassin: 'rgba(50,30,70,1)', kitsune: 'rgba(255,170,70,1)', yukionna: 'rgba(235,245,255,1)' };
 const PROJ_SPEED = { arrow: 12, dart: 13, icearrow: 11 };
+const RANGED_LIFE = 1.4; // a ranged enemy's shot flies this long; its telegraph line is drawn to that full reach (speed x life)
 
 export const BEHAVIORS = {
   // the training dummy: stands still, can't be knocked away, and heals to full after a few quiet seconds
@@ -39,12 +47,47 @@ export const BEHAVIORS = {
     },
     strike: () => {},
   },
+  // Banner Bearer: stands where its circle covers the most allies (rechecked every BANNER.retarget s), keeps away from
+  // the player, keeps the buff up on everyone inside, and jabs with the pole only when the player is right on it
+  banner: {
+    think: (e, dt, g) => {
+      const [dx, dy, d] = e.toPlayer(), R = BANNER.radius, D = e.data;
+      const allies = g.enemies.filter((o) => o !== e && !o.dead && !o.hidden && o.state !== 'intro' && o.cfg.behavior !== 'banner');
+      for (const o of allies) if (Math.hypot(o.x - e.x, o.y - e.y) <= R && o.state !== 'spawn') o.bannerT = 0.25;
+      if (d < e.cfg.range * SWEEP.range * 0.85 && e.atkCd <= 0) { e.face(dx, dy); e.windup(e.cfg.windup, { kind: 'arc', range: e.cfg.range * SWEEP.range + 0.2, arc: 1.6, angle: Math.atan2(dy, dx) }); return; }
+      D.reT = (D.reT || 0) - dt;
+      if (D.reT <= 0 || !D.spot) { // the best spot: an ally's place or the group's middle, whichever covers the most (closer wins ties)
+        D.reT = BANNER.retarget;
+        const cands = allies.map((o) => [o.x, o.y]);
+        if (allies.length) cands.push([allies.reduce((a, o) => a + o.x, 0) / allies.length, allies.reduce((a, o) => a + o.y, 0) / allies.length]);
+        let best = null, bs = -1e9;
+        for (const [x, y] of cands) {
+          let n = 0; for (const o of allies) if (Math.hypot(o.x - x, o.y - y) <= R * 0.8) n++;
+          const pd = Math.hypot(x - e.target.x, y - e.target.y);
+          const sc = n * 10 - Math.hypot(x - e.x, y - e.y) * 0.6 - (pd < BANNER.keepAway ? (BANNER.keepAway - pd) * 6 : 0);
+          if (sc > bs) { bs = sc; best = [x, y]; }
+        }
+        // nobody to lead: hang back at the edge of the fight
+        D.spot = best || [e.target.x - dx * 4.5, e.target.y - dy * 4.5];
+      }
+      let mx = D.spot[0] - e.x, my = D.spot[1] - e.y; const md = Math.hypot(mx, my);
+      if (d < BANNER.keepAway) { mx -= dx * (BANNER.keepAway - d) * 2; my -= dy * (BANNER.keepAway - d) * 2; } // back off from the player
+      e.face(dx, dy); // (always watching the player)
+      if (md < 0.35 && d >= BANNER.keepAway) e.halt(dt);
+      else e.steer(mx, my, clamp(Math.hypot(mx, my), 0.4, 1), dt);
+    },
+    strike: (e, g) => {
+      sfx.slash();
+      g.fx.slash(e.x, e.y, slashA(e.faceX, e.faceY), e.cfg.range * SWEEP.range * 0.7, 1.6, 'rgba(255,210,170,0.7)', 7, 0.14);
+      e.hurtPlayerIfIn(e.cfg.range * SWEEP.range + 0.2, 1.6, e.dmg);
+    },
+  },
   melee: {
     think: (e, dt, g) => meleeThink(e, dt, g),
     strike: (e, g) => {
       sfx.slash();
-      g.fx.slash(e.x, e.y, slashA(e.faceX, e.faceY), e.cfg.range * 0.7, 1.9, e.type === 'skeleton' ? 'rgba(170,230,255,0.7)' : 'rgba(255,200,200,0.7)', 8, 0.14);
-      e.hurtPlayerIfIn(e.cfg.range, 2.0, e.dmg);
+      g.fx.slash(e.x, e.y, slashA(e.faceX, e.faceY), e.cfg.range * SWEEP.range * 0.7, 1.9, e.type === 'skeleton' ? 'rgba(170,230,255,0.7)' : 'rgba(255,200,200,0.7)', 8, 0.14);
+      e.hurtPlayerIfIn(e.cfg.range * SWEEP.range, 2.0, e.dmg * SWEEP.dmg);
     },
   },
   lunge: {
@@ -72,7 +115,7 @@ export const BEHAVIORS = {
     think: (e, dt, g) => {
       const [dx, dy, d] = e.toPlayer(); e.face(dx, dy);
       if (!e.data.strafe || Math.random() < dt * 0.6) e.data.strafe = Math.random() < 0.5 ? 1 : -1;
-      if (d < e.cfg.range && d > 2.5 && e.atkCd <= 0) { e.windup(e.cfg.windup, { kind: 'line', len: Math.min(d + 1, 8), width: 0.12, angle: Math.atan2(dy, dx), track: true }); return; }
+      if (d < e.cfg.range && d > 2.5 && e.atkCd <= 0) { e.windup(e.cfg.windup, { kind: 'line', len: (PROJ_SPEED[e.cfg.proj || 'arrow'] || 12) * RANGED_LIFE, width: isArrow(e) ? ARROW_HALF * 2 : laneW(0.18), angle: Math.atan2(dy, dx), track: true }); return; }
       let mx = 0, my = 0;
       if (d < 4.5) { mx = -dx; my = -dy; } else if (d > 7) { mx = dx; my = dy; }
       mx += -dy * e.data.strafe * 0.8; my += dx * e.data.strafe * 0.8;
@@ -81,7 +124,7 @@ export const BEHAVIORS = {
     strike: (e, g) => {
       // fly along the locked aim (no leading): exactly where the telegraph pointed
       const kind = e.cfg.proj || 'arrow', sp = PROJ_SPEED[kind] || 12;
-      g.spawnProjectile({ owner: 'enemy', kind, x: e.x, y: e.y, z: 0.7, vx: e.faceX * sp, vy: e.faceY * sp, dmg: e.dmg, r: 0.18, life: 1.4, onHit: e.cfg.onHit });
+      g.spawnProjectile({ owner: 'enemy', src: e, kind, x: e.x, y: e.y, z: 0.7, vx: e.faceX * sp, vy: e.faceY * sp, dmg: e.dmg, r: 0.18, life: RANGED_LIFE, onHit: e.cfg.onHit, ...(isArrow(e) ? { hitR: ARROW_HALF } : {}) });
       sfx.enemyShoot();
     },
   },
@@ -129,7 +172,7 @@ export const BEHAVIORS = {
     strike: (e, g) => {
       const p = e.target;
       const tx = clamp(p.x + p.vx * 0.5, 1, g.world.N - 1), ty = clamp(p.y + p.vy * 0.5, 1, g.world.N - 1);
-      g.spawnProjectile({ owner: 'enemy', kind: e.cfg.proj || 'bomb', lob: true, x: e.x, y: e.y, z: 0.9, sx: e.x, sy: e.y, tx, ty, T: 1.0, t: 0, dmg: e.dmg, r: 1.45, life: 2 });
+      g.spawnProjectile({ owner: 'enemy', src: e, kind: e.cfg.proj || 'bomb', lob: true, x: e.x, y: e.y, z: 0.9, sx: e.x, sy: e.y, tx, ty, T: 1.0, t: 0, dmg: e.dmg, r: 1.45, life: 2 });
       g.hazards.push({ kind: 'marker', x: tx, y: ty, r: 1.45, t: 1.0, dur: 1.0 });
       sfx.throwKnife();
     },
@@ -180,10 +223,10 @@ export const BEHAVIORS = {
       e.steer(d < 5 ? -dx : dx * 0.3 - dy, d < 5 ? -dy : dy * 0.3 + dx, 0.7, dt);
     },
     strike: (e, g) => {
-      const lv = levelInBiome(g), n = lv >= 7 ? 3 : lv >= 4 ? 2 : 1;
+      const lv = levelInBiome(g), n = Math.min(e.cfg.maxProj ?? 3, lv >= 7 ? 3 : lv >= 4 ? 2 : 1);
       for (let k = 0; k < n; k++) {
         const a = Math.atan2(e.faceY, e.faceX) + (k - (n - 1) / 2) * 0.6;
-        g.spawnProjectile({ owner: 'enemy', kind: e.cfg.proj || 'orb', x: e.x, y: e.y, z: 0.9, vx: Math.cos(a) * 4, vy: Math.sin(a) * 4, dmg: e.dmg, r: 0.3, life: 5, homing: 1.8, speed: 4.2, seed: rand(0, 10) });
+        g.spawnProjectile({ owner: 'enemy', src: e, kind: e.cfg.proj || 'orb', x: e.x, y: e.y, z: 0.9, vx: Math.cos(a) * 4, vy: Math.sin(a) * 4, dmg: e.dmg, r: 0.3, life: 5, homing: 1.8, speed: 4.2, seed: rand(0, 10) });
       }
       sfx.enemyShoot();
     },
@@ -230,8 +273,9 @@ export const BEHAVIORS = {
       if (e.state !== 'charge') return;
       e.t -= dt;
       if (!e.data.hit) {
-        for (const p of g.players) {
+        for (const p of g.targets) {
           if (!p.active || Math.hypot(p.x - e.x, p.y - e.y) > 0.95 + p.r) continue;
+          { const L = e.lane; if (L) { const ox = p.x - L.ox, oy = p.y - L.oy, al = ox * L.fx + oy * L.fy; if (al < 0 || al > L.len || Math.abs(ox * L.fy - oy * L.fx) > L.width / 2) continue; } } // (only inside the red lane)
           if (p.hurt(e.dmg, e.x, e.y, 8)) { e.data.hit = true; p.applyStun(PLAYER_STUN); sfx.clang(); if (e.cfg.onHit) p.applyChill(e.cfg.onHit.chill, e.cfg.onHit.dur); }
         }
       }
@@ -278,10 +322,10 @@ export const BEHAVIORS = {
       if (e.state !== 'charge') return;
       const S = SUMO, [fx, fy] = e.data.dir || [e.faceX, e.faceY];
       e.t -= dt;
-      if (!e.data.hit) for (const p of g.players) { // in front of his belly, inside the lane
+      if (!e.data.hit) for (const p of g.targets) { // in front of his belly, inside the lane
         if (!p.active) continue;
         const dx = p.x - e.x, dy = p.y - e.y, along = dx * fx + dy * fy, side = Math.abs(dx * fy - dy * fx);
-        const L = e.lane, inLane = !L || (() => { const ox = p.x - L.ox, oy = p.y - L.oy, al = ox * L.fx + oy * L.fy; return al > -0.3 && al < L.len + 0.2 && Math.abs(ox * L.fy - oy * L.fx) < L.width / 2 + p.r * 0.6; })();
+        const L = e.lane, inLane = !L || (() => { const ox = p.x - L.ox, oy = p.y - L.oy, al = ox * L.fx + oy * L.fy; return al > 0 && al < L.len && Math.abs(ox * L.fy - oy * L.fx) < L.width / 2; })(); // (centre inside the red lane)
         if (inLane && along > -e.r && along < e.r + p.r + 0.15 && side < S.width / 2 + p.r * 0.6 && p.hurt(e.dmg * S.chargeMul, e.x, e.y, 12)) { e.data.hit = true; if (e.cfg.onHit) p.applyChill(e.cfg.onHit.chill, e.cfg.onHit.dur); }
       }
       if (Math.random() < 0.7) g.particles.emit('dust', e.x, e.y, 0.05, rand(-0.5, 0.5), rand(-0.5, 0.5), 0.3, 0.5, 5, '#c8b088', { under: true });
@@ -352,7 +396,7 @@ export const BEHAVIORS = {
       const p = e.target;
       const tx = clamp(p.x + p.vx * 0.3, 1, g.world.N - 1), ty = clamp(p.y + p.vy * 0.3, 1, g.world.N - 1);
       e.state = 'leap'; e.t = 0; e.data.dur = 0.85; e.data.sx = e.x; e.data.sy = e.y; e.data.tx = tx; e.data.ty = ty;
-      e.tele = { kind: 'circle', x: tx, y: ty, r: 2.2, k: 0 }; e.flying = true; e.vx = e.vy = 0; sfx.dash();
+      e.tele = { kind: 'circle', x: tx, y: ty, r: 2.2, k: 0, outer: KOMAINU_WAVE + RING_W }; e.flying = true; e.vx = e.vy = 0; sfx.dash();
     },
     custom: (e, dt, g) => {
       if (e.state !== 'leap') return;
@@ -363,7 +407,7 @@ export const BEHAVIORS = {
       if (k >= 1) {
         e.z = 0; e.tele = null; e.flying = false;
         slamAt(g, e.x, e.y, 2.2, e.dmg, e);
-        ringHazard(g, e.x, e.y, 4.6, Math.round(e.dmg * 0.5), 7);
+        ringHazard(g, e.x, e.y, KOMAINU_WAVE, Math.round(e.dmg * 0.5), 7);
         e.state = 'recover'; e.t = e.cfg.recover;
       }
     },
@@ -403,7 +447,7 @@ export const BEHAVIORS = {
       e.t -= dt; e.halt(dt);
       const base = Math.atan2(e.faceY, e.faceX);
       for (let k = 0; k < 3; k++) { const a = base + rand(-0.5, 0.5), s = rand(5, 9); g.particles.emit('dot', e.x, e.y, 1.2, Math.cos(a) * s, Math.sin(a) * s, 0, 0.5, 2.4, Math.random() < 0.5 ? '#e8f8ff' : '#9ee4ff', { drag: 1 }); }
-      for (const p of g.players) {
+      for (const p of g.targets) {
         if (p.dead || e.data.hitSet.has(p)) continue;
         const dx = p.x - e.x, dy = p.y - e.y, d = Math.hypot(dx, dy);
         if (d < 5.5 && Math.abs(angDiff(base, Math.atan2(dy, dx))) < 0.55 && p.hurt(e.dmg, e.x, e.y, 4)) { p.applyChill(e.cfg.onHit.chill, e.cfg.onHit.dur); e.data.hitSet.add(p); }
@@ -422,14 +466,14 @@ export const BEHAVIORS = {
       e.data.summonCd -= dt; e.data.whirlCd -= dt;
       const p2 = e.phase === 2;
       // the great whirl: a long, slow wind-up and a huge circle of steel; get out or pay dearly
-      if (e.atkCd <= 0 && e.data.whirlCd <= 0 && d < 5.5) {
+      if (e.atkCd <= 0 && e.data.whirlCd <= 0 && d < 7) {
         e.data.whirlCd = p2 ? 9 : 12;
-        e.windup(p2 ? 1.15 : 1.4, { kind: 'circle', x: e.x, y: e.y, r: 5 }, 'iaiCrouch', 'whirl'); sfx.bossRoar(); return;
+        e.windup(p2 ? 1.6 : 1.9, { kind: 'circle', x: e.x, y: e.y, r: RONIN_WHIRL }, 'iaiCrouch', 'whirl'); sfx.bossRoar(); return; // (a long charge for the big circle)
       }
       const adds = g.enemies.filter((x) => !x.dead && !x.boss).length;
       if (e.data.summonCd <= 0 && adds < (p2 ? 6 : 4)) { e.state = 'summon'; e.t = 0.9; e.data.summonCd = p2 ? 12 : 14; e.vx = e.vy = 0; return; }
       if (e.atkCd <= 0) {
-        if (d < 2.8 && Math.random() < 0.35) { e.data.combo = p2 ? 2 : 1; startRoninDash(e); return; } // close in: sometimes he dashes through you
+        if (d < 2.8 && Math.random() < 0.35) { e.data.combo = 3; startRoninDash(e); return; } // close in: sometimes he dashes through you, three times
         if (d < 2.8) { e.windup(p2 ? 0.42 : 0.55, { kind: 'arc', range: 3.0, arc: 3.8, angle: Math.atan2(dy, dx) }, 'windup', 'sweep'); return; }
         if (d < 9) { e.data.combo = p2 ? 4 : 3; startRoninDash(e); return; }
       }
@@ -443,9 +487,9 @@ export const BEHAVIORS = {
         e.t = 0.55;
       } else if (next === 'whirl') {
         sfx.heavy(); sfx.slam(); g.shake(12); g.hitstop(0.06);
-        for (let k = 0; k < 3; k++) g.fx.slash(e.x, e.y, k * 2.1, 4.6, 2.3, 'rgba(255,210,190,0.9)', 22, 0.3);
-        g.fx.ring(e.x, e.y, 5, 'rgba(255,200,170,0.9)', 0.45, 7);
-        for (const p of g.players) if (p.active && Math.hypot(p.x - e.x, p.y - e.y) < 5 + p.r * 0.5) p.hurt(BOSS_DMG.ronin_boss.whirl, e.x, e.y, 12);
+        for (let k = 0; k < 3; k++) g.fx.slash(e.x, e.y, k * 2.1, RONIN_WHIRL * 0.92, 2.3, 'rgba(255,210,190,0.9)', 24, 0.32);
+        g.fx.ring(e.x, e.y, RONIN_WHIRL, 'rgba(255,200,170,0.9)', 0.5, 8);
+        for (const p of g.targets) if (p.active && Math.hypot(p.x - e.x, p.y - e.y) < RONIN_WHIRL) p.hurt(BOSS_DMG.ronin_boss.whirl, e.x, e.y, 12);
         e.t = 0.9;
       } else if (next === 'dash') {
         e.state = 'dash'; e.t = 0.24; e.data.hit = false;
@@ -470,6 +514,7 @@ export const BEHAVIORS = {
           const heavyIn = g.enemies.filter((x) => !x.dead && !x.boss && x.cfg.heavy).length;
           const band = [pick(KURO_ADDS), pick(KURO_ADDS)];
           if (e.phase === 2 && heavyIn < 2) band.push(pick(KURO_HEAVY)); else if (e.phase === 2) band.push(pick(KURO_ADDS));
+          for (let k = band.length, n = coopCount(g, band.length); k < n; k++) band.push(pick(KURO_ADDS)); // (co-op: x1.4)
           band.forEach((type, k) => {
             const a = (k / band.length) * TAU + rand(-0.3, 0.3);
             let x = e.x + Math.cos(a) * 2, y = e.y + Math.sin(a) * 2;
@@ -478,6 +523,64 @@ export const BEHAVIORS = {
           });
           e.state = 'recover'; e.t = 0.4; sfx.bossRoar();
         }
+      }
+    },
+  },
+
+  // ================================================================ AREA 2: Kaze Tsubame (flying)
+  // circles the player at about 3.5 tiles, then folds its wings (a red lane) and dives straight through
+  swoop: {
+    init: (e) => { e.flying = true; e.z = 0.9; e.data.orbit = Math.random() < 0.5 ? 1 : -1; },
+    think: (e, dt, g) => {
+      const [dx, dy, d] = e.toPlayer(); e.face(dx, dy);
+      e.z = 0.9 + Math.sin(g.time * 3 + e.seed) * 0.15;
+      const L = e.cfg.dash * e.cfg.dashDur;
+      if (d < e.cfg.range && d > 1.4 && e.atkCd <= 0) { e.windup(e.cfg.windup, { kind: 'line', len: L + 0.6, width: 0.75, angle: Math.atan2(dy, dx) }, 'windup', 'swoop'); return; }
+      const want = 3.5, inout = d > want + 0.6 ? 1 : d < want - 0.6 ? -1 : 0;
+      e.steer(dx * inout - dy * e.data.orbit * 0.9, dy * inout + dx * e.data.orbit * 0.9, 1, dt);
+    },
+    strike: (e) => { e.state = 'swoop'; e.t = e.cfg.dashDur; e.data.hit = false; e.vx = e.faceX * e.cfg.dash; e.vy = e.faceY * e.cfg.dash; sfx.dash(); },
+    custom: (e, dt, g) => {
+      if (e.state !== 'swoop') return;
+      e.t -= dt;
+      if (!e.data.hit && e.hurtInLane(0.9, e.dmg, 5)) e.data.hit = true;
+      if (Math.random() < 0.7) g.particles.emit('leaf', e.x, e.y, 0.9, rand(-1, 1), rand(-1, 1), 0.4, 0.4, 2.4, '#e8f0ff', { drag: 2 });
+      if (e.t <= 0) { e.state = 'recover'; e.t = e.cfg.recover; e.vx *= 0.15; e.vy *= 0.15; e.data.orbit *= -1; }
+    },
+  },
+
+  // ================================================================ AREA 2: Matagi Hunter
+  // stays 6-9 tiles away (backs off when you come close), lays a bear trap at his feet now and then as he goes,
+  // and shoots a long-range rifle: a thin aim line that follows you, then freezes just before the shot
+  hunter: {
+    trackDuringWindup: true,
+    lockBefore: 0.35,
+    init: (e) => { e.data.trapCd = rand(1.5, 3.5); e.data.strafe = 1; },
+    think: (e, dt, g) => {
+      const [dx, dy, d] = e.toPlayer(); e.face(dx, dy);
+      e.data.trapCd -= dt;
+      const mine = g.hazards.filter((h) => h.kind === 'trap' && h.owner === e.id && h.snapT == null).length;
+      if (e.data.trapCd <= 0 && mine < e.cfg.maxTraps && d < 7.5 && !g.world.blocked(e.x, e.y, 0.3)) { e.state = 'settrap'; e.t = 0.55; e.vx = e.vy = 0; e.data.trapCd = rand(4.5, 7.5); return; }
+      if (d < e.cfg.range && d > 3 && e.atkCd <= 0) { e.windup(e.cfg.windup, { kind: 'line', len: 27 * 0.55, width: laneW(0.14), angle: Math.atan2(dy, dx), track: true }, 'shoot', 'fire'); return; }
+      if (Math.random() < dt * 0.5) e.data.strafe = Math.random() < 0.5 ? 1 : -1;
+      let mx = 0, my = 0;
+      if (d < 6) { mx = -dx * 1.4; my = -dy * 1.4; } else if (d > 9) { mx = dx; my = dy; }
+      mx += -dy * e.data.strafe * 0.6; my += dx * e.data.strafe * 0.6;
+      e.steer(mx, my, d < 6 ? 1 : 0.8, dt);
+    },
+    strike: (e, g) => {
+      g.spawnProjectile({ owner: 'enemy', src: e, kind: 'bullet', x: e.x + e.faceX * 0.5, y: e.y + e.faceY * 0.5, z: 0.75, vx: e.faceX * 27, vy: e.faceY * 27, dmg: e.dmg, r: 0.14, life: 0.55 });
+      sfx.rifle(); g.shake(2);
+      g.particles.burst('smoke', e.x + e.faceX * 0.8, e.y + e.faceY * 0.8, 0.8, 6, 1.2, 0.8, 7, 'rgba(200,196,190,1)');
+      g.particles.burst('spark', e.x + e.faceX * 0.8, e.y + e.faceY * 0.8, 0.8, 5, 4, 0.15, 1.4, '#ffd080');
+    },
+    custom: (e, dt, g) => {
+      if (e.state !== 'settrap') return;
+      e.t -= dt; e.vx = e.vy = 0;
+      if (e.t <= 0) {
+        g.hazards.push({ kind: 'trap', x: e.x, y: e.y, owner: e.id, arm: 0.5, life: 25, dmg: e.cfg.trapDmg * e.dmgMul, stun: e.cfg.trapStun });
+        sfx.clang();
+        e.state = 'recover'; e.t = 0.25;
       }
     },
   },
@@ -492,7 +595,13 @@ export const BEHAVIORS = {
       const p = e.target;
       const [dx, dy, d] = e.toPlayer(); e.face(dx, dy);
       e.z = lerp(e.z, 0.8 + Math.sin(g.time * 2.2) * 0.2, 1 - Math.exp(-4 * dt));
-      if (e.phase === 1 && e.hp < e.hpMax * 0.5) { e.phase = 2; e.speed = 5; sfx.bossRoar(); g.shake(8); g.bossPhase(e, 'The Tengu summons the storm!'); }
+      if (e.phase === 1 && e.hp < e.hpMax * 0.5) { e.phase = 2; e.speed = 5; sfx.bossRoar(); g.shake(8); g.bossPhase(e, 'The Tengu summons the storm!'); e.data.flockCd = 0.8; }
+      // phase 2: he calls flocks of wind swallows and crow archers down from the peaks (a new flock every 11 s, up to 9 at once)
+      if (e.phase === 2) {
+        e.data.flockCd -= dt;
+        const adds = g.enemies.filter((x) => !x.dead && !x.boss).length;
+        if (e.data.flockCd <= 0 && adds < 9) { e.data.flockCd = 11; tenguFlock(g, e); }
+      }
       e.data.orbit += dt * (e.phase === 2 ? 0.9 : 0.6);
       const tx = p.x + Math.cos(e.data.orbit) * 4.5, ty = p.y + Math.sin(e.data.orbit) * 4.5;
       e.steer(tx - e.x, ty - e.y, Math.min(1, Math.hypot(tx - e.x, ty - e.y) / 2), dt);
@@ -500,8 +609,8 @@ export const BEHAVIORS = {
         const r = Math.random();
         if (r < 0.42) {
           e.data.fan = tenguFan(e, Math.atan2(dy, dx), 0);
-          e.windup(0.9, { kind: 'fan', angles: e.data.fan, len: 7.5, width: 0.26 }, 'cast', 'volley');
-        } else if (r < 0.72 && d < 6) { e.windup(0.7, { kind: 'cone', range: 6.5, arc: 1.25, angle: Math.atan2(dy, dx), track: true }, 'cast', 'gust'); }
+          e.windup(0.9, { kind: 'fan', angles: e.data.fan, len: 7.5 * 2.2, width: laneW(0.18) }, 'cast', 'volley');
+        } else if (r < 0.72 && d < 6) { e.windup(0.8, { kind: 'cone', range: 6.5, arc: 1.25, angle: Math.atan2(dy, dx), track: true, lockFrac: 0.75 }, 'cast', 'gust'); }
         else { e.state = 'rise'; e.t = 0.5; e.vx = e.vy = 0; sfx.dash(); }
       }
     },
@@ -511,7 +620,7 @@ export const BEHAVIORS = {
         fireFan(e, g, e.data.fan);
         const base = e.data.fanBase;
         e.data.fan = tenguFan(e, base, 0.5); // second volley: shifted by half a lane
-        e.state = 'volley'; e.t = 0; e.tele = { kind: 'fan', angles: e.data.fan, len: 7.5, width: 0.26, k: 0 };
+        e.state = 'volley'; e.t = 0; e.tele = { kind: 'fan', angles: e.data.fan, len: 7.5 * 2.2, width: laneW(0.18), k: 0 };
       } else if (next === 'gust') {
         sfx.dash(); sfx.heavy();
         for (let k = 0; k < 24; k++) {
@@ -519,7 +628,7 @@ export const BEHAVIORS = {
           g.particles.emit('leaf', e.x, e.y, 0.8, Math.cos(a) * s, Math.sin(a) * s, rand(-0.5, 0.5), 0.8, 3, pick(['#e0542c', '#f09a34', '#ffffff']), { drag: 1.2 });
         }
         e.hurtPlayerIfIn(6.5, 1.3, BOSS_DMG.tengu.gust, 0);
-        for (const p of g.players) {
+        for (const p of g.targets) {
           if (p.dead) continue;
           const dx = p.x - e.x, dy = p.y - e.y, d = Math.hypot(dx, dy);
           if (d < 6.5 && Math.abs(angDiff(Math.atan2(e.faceY, e.faceX), Math.atan2(dy, dx))) < 0.65) { p.kvx += e.faceX * 12; p.kvy += e.faceY * 12; }
@@ -536,18 +645,18 @@ export const BEHAVIORS = {
       } else if (e.state === 'rise') {
         e.t -= dt; e.z += dt * 9; e.halt(dt);
         e.alpha = clamp(e.t / 0.5, 0.15, 1);
-        if (e.t <= 0) { e.state = 'mark'; e.t = e.phase === 2 ? 0.8 : 1.0; e.data.mx = p.x; e.data.my = p.y; e.hidden = true; e.tele = { kind: 'circle', x: p.x, y: p.y, r: 1.8, k: 0 }; }
+        if (e.t <= 0) { e.state = 'mark'; e.t = e.data.markDur = e.phase === 2 ? 1.0 : 1.25; e.data.mx = p.x; e.data.my = p.y; e.hidden = true; e.tele = { kind: 'circle', x: p.x, y: p.y, r: TENGU_DIVE_R, k: 0, spokes: e.phase === 2 ? { n: 12, len: 6 * 2, width: laneW(0.18) } : null }; }
       } else if (e.state === 'mark') {
         e.t -= dt;
-        if (e.t > 0.35) { e.data.mx = lerp(e.data.mx, p.x, 1 - Math.exp(-6 * dt)); e.data.my = lerp(e.data.my, p.y, 1 - Math.exp(-6 * dt)); }
-        e.tele.x = e.data.mx; e.tele.y = e.data.my; e.tele.k = 1 - Math.max(0, e.t) / 1.0;
+        if (e.t > 0.45) { e.data.mx = lerp(e.data.mx, p.x, 1 - Math.exp(-6 * dt)); e.data.my = lerp(e.data.my, p.y, 1 - Math.exp(-6 * dt)); }
+        e.tele.x = e.data.mx; e.tele.y = e.data.my; e.tele.k = 1 - Math.max(0, e.t) / (e.data.markDur || 1.25);
         if (e.t <= 0) { e.state = 'dive'; e.t = 0.18; e.x = e.data.mx; e.y = e.data.my; e.hidden = false; e.z = 4; e.alpha = 1; }
       } else if (e.state === 'dive') {
         e.t -= dt; e.z = Math.max(0, (e.t / 0.18) * 4);
         if (e.t <= 0) {
           e.tele = null; e.z = 0;
-          slamAt(g, e.x, e.y, 1.8, BOSS_DMG.tengu.dive, e);
-          if (e.phase === 2) for (let k = 0; k < 12; k++) { const a = (k / 12) * TAU; g.spawnProjectile({ owner: 'enemy', kind: 'feather', x: e.x, y: e.y, z: 0.6, vx: Math.cos(a) * 6, vy: Math.sin(a) * 6, dmg: Math.round(BOSS_DMG.tengu.feather * 0.7), r: 0.18, life: 2 }); }
+          slamAt(g, e.x, e.y, TENGU_DIVE_R, BOSS_DMG.tengu.dive, e);
+          if (e.phase === 2) for (let k = 0; k < 12; k++) { const a = (k / 12) * TAU; g.spawnProjectile({ owner: 'enemy', src: e, kind: 'feather', x: e.x, y: e.y, z: 0.6, vx: Math.cos(a) * 6, vy: Math.sin(a) * 6, dmg: Math.round(BOSS_DMG.tengu.feather * 0.7), r: 0.18, life: 2 }); }
           e.state = 'recover'; e.t = 0.8;
         }
       }
@@ -561,15 +670,29 @@ export const BEHAVIORS = {
     think: (e, dt, g) => {
       const [dx, dy, d] = e.toPlayer(); e.face(dx, dy);
       const hpk = e.hp / e.hpMax;
-      if (e.phase === 1 && hpk < 0.66) { e.phase = 2; sfx.bossRoar(); g.shake(10); g.bossPhase(e, 'Shuten stokes the hellfire!'); }
-      if (e.phase === 2 && hpk < 0.33) { e.phase = 3; e.speed = 2.4; sfx.bossRoar(); g.shake(14); g.bossPhase(e, 'Shuten is ENRAGED!'); }
+      if (e.phase === 1 && hpk < 0.66) { e.phase = 2; sfx.bossRoar(); g.shake(10); g.bossPhase(e, 'Shuten stokes the hellfire!'); e.data.addCd = 1.2; }
+      if (e.phase === 2 && hpk < 0.33) { e.phase = 3; e.speed = 2.4; sfx.bossRoar(); g.shake(14); g.bossPhase(e, 'Shuten is ENRAGED!'); e.data.addCd = Math.min(e.data.addCd ?? 1, 1.2); }
+      if (e.phase >= 2 && g.role !== 'client') { // the dead of the castle town answer his call
+        e.data.addCd = (e.data.addCd ?? 1.2) - dt;
+        const adds = g.enemies.filter((o) => !o.dead && !o.boss).length;
+        if (e.data.addCd <= 0) {
+          e.data.addCd = SHUTEN_ADDS.cd[e.phase];
+          if (adds < SHUTEN_ADDS.max) {
+            const pool = BIOME_POOLS[2].filter((t) => !ENEMIES[t].heavy && !ENEMIES[t].shield);
+            const n = Math.min(coopCount(g, SHUTEN_ADDS.n), SHUTEN_ADDS.max - adds);
+            sfx.bossRoar(); g.shake(4);
+            g.particles.burst('ember', e.x, e.y, 1.6, 20, 3, 0.8, 2.6, '#ff6a20');
+            for (let k = 0; k < n; k++) g.later(k * 0.3, () => { if (!e.dead) g.spawnEnemy(pick(pool)); });
+          }
+        }
+      }
       const wk = e.phase === 3 ? 0.75 : 1;
       if (e.phase === 3 && Math.random() < dt * 4) g.particles.emit('ember', e.x + rand(-1, 1), e.y + rand(-1, 1), rand(0.5, 3), rand(-0.5, 0.5), rand(-0.5, 0.5), rand(1, 2), 0.8, 2, '#ff6a20');
       if (e.atkCd <= 0) {
         const r = Math.random();
-        if (d < 3.4 && r < 0.55) { e.windup(0.85 * wk, { kind: 'circle', x: e.x + dx * 2, y: e.y + dy * 2, r: 2.3 }, 'windup', 'slam'); return; }
-        if (d < 3.4) { e.windup(0.6 * wk, { kind: 'circle', x: e.x, y: e.y, r: 4.5 }, 'windup', 'stomp'); return; }
-        if (e.phase === 3 && r < 0.4) { e.windup(0.6, { kind: 'line', len: 8, width: 1.6, angle: Math.atan2(dy, dx) }, 'windup', 'charge'); return; }
+        if (d < 3.4 * SA && r < 0.55) { e.windup(0.85 * wk, { kind: 'circle', x: e.x + dx * 2 * SA, y: e.y + dy * 2 * SA, r: 2.3 * SA }, 'windup', 'slam'); return; }
+        if (d < 3.4 * SA) { e.windup(0.6 * wk, { kind: 'circle', x: e.x, y: e.y, r: 4.5 * SA }, 'windup', 'stomp'); return; }
+        if (e.phase === 3 && r < 0.4) { e.windup(0.6, { kind: 'line', len: 8 * SA, width: 1.6 * SA, angle: Math.atan2(dy, dx) }, 'windup', 'charge'); return; }
         e.windup(0.9 * wk, null, 'windup', 'firewave'); return;
       }
       e.steer(dx, dy, 1, dt);
@@ -577,12 +700,12 @@ export const BEHAVIORS = {
     strike: (e, g, next) => {
       const D = BOSS_DMG.oni_lord;
       if (next === 'slam') {
-        slamAt(g, e.x + e.faceX * 2, e.y + e.faceY * 2, 2.3, D.slam, e);
-        if (e.phase >= 2) g.hazards.push({ kind: 'fire', x: e.x + e.faceX * 2, y: e.y + e.faceY * 2, r: 1.4, life: 4, tick: 0, dmg: D.fire });
+        slamAt(g, e.x + e.faceX * 2 * SA, e.y + e.faceY * 2 * SA, 2.3 * SA, D.slam, e);
+        if (e.phase >= 2) g.hazards.push({ kind: 'fire', x: e.x + e.faceX * 2 * SA, y: e.y + e.faceY * 2 * SA, r: 1.4 * SA, life: 4, tick: 0, dmg: D.fire });
         e.t = 1.0 / (e.phase === 3 ? 1.4 : 1);
       } else if (next === 'stomp') {
         sfx.slam(); g.shake(9);
-        g.hazards.push({ kind: 'ring', x: e.x, y: e.y, rad: 0.5, speed: 9, max: 4.5, width: 0.5, dmg: D.stomp, hit: false, gap: null });
+        g.hazards.push({ kind: 'ring', x: e.x, y: e.y, rad: 0.5, speed: 9 * SA, max: 4.5 * SA, width: 0.5 * SA, dmg: D.stomp, hit: false, gap: null });
         e.t = 0.8;
       } else if (next === 'firewave') {
         const n = e.phase;
@@ -591,7 +714,7 @@ export const BEHAVIORS = {
           g.later(k * 0.55, () => {
             if (e.dead) return;
             sfx.explode(); g.shake(5);
-            g.hazards.push({ kind: 'ring', x: e.x, y: e.y, rad: 0.8, speed: 4.6, max: 14, width: 0.45, dmg: D.wave, hit: false, gap: rand(0, TAU), gapW: 0.7, fire: true });
+            g.hazards.push({ kind: 'ring', x: e.x, y: e.y, rad: 11, speed: -3.8, min: 0.9, max: 11, width: 0.45 * SA, dmg: D.wave, hit: false, gap: rand(0, TAU), gapW: 1.0, fire: true, warn: 0.6 }); // (from outside in; warn: shown, harmless, before it moves)
           });
         }
         e.t = 0.6 + n * 0.55;
@@ -602,8 +725,8 @@ export const BEHAVIORS = {
     custom: (e, dt, g) => {
       if (e.state !== 'charge') return;
       e.t -= dt; e.data.trail -= dt;
-      if (!e.data.hit && e.hurtInLane(1.6, BOSS_DMG.oni_lord.charge, 10)) e.data.hit = true;
-      if (e.data.trail <= 0) { e.data.trail = 0.12; g.hazards.push({ kind: 'fire', x: e.x, y: e.y, r: 0.8, life: 3, tick: 0, dmg: BOSS_DMG.oni_lord.fire }); }
+      if (!e.data.hit && e.hurtInLane(1.6 * SA, BOSS_DMG.oni_lord.charge, 10)) e.data.hit = true;
+      if (e.data.trail <= 0) { e.data.trail = 0.12; g.hazards.push({ kind: 'fire', x: e.x, y: e.y, r: 0.8 * SA, life: 3, tick: 0, dmg: BOSS_DMG.oni_lord.fire }); }
       if (e.t <= 0) { e.state = 'recover'; e.t = 0.9; e.vx *= 0.1; e.vy *= 0.1; }
     },
   },
@@ -632,10 +755,14 @@ export const BEHAVIORS = {
         // cycle through his arts so each fight shows all of them
         const arts = e.phase === 1 ? ['iai', 'crescent', 'seals', 'iai'] : ['iai', 'mirage', 'crescent', 'seals', 'iai', 'mirage'];
         const art = arts[e.data.seq++ % arts.length];
-        if (art === 'iai') { const len = clamp(d + 2.2, 5, 9.5); e.windup(1.1 * wk, { kind: 'line', len, width: 0.85, angle: a, track: true }, 'iaiCrouch', 'iai'); sfx.iai(); return; }
-        if (art === 'crescent') { e.windup(0.95 * wk, { kind: 'circle', x: e.x, y: e.y, r: 1.4 }, 'cast', 'crescent'); return; }
+        if (art === 'iai') { const len = clamp(d + 2.2, 5, 9.5); e.windup(1.1 * wk, { kind: 'line', len, width: 1.5, angle: a, track: true }, 'iaiCrouch', 'iai'); sfx.iai(); return; }
+        if (art === 'crescent') {
+          const n = e.phase === 1 ? 3 : e.phase === 2 ? 4 : 5;
+          e.data.cres = Array.from({ length: n }, (_, k) => a + (k - (n - 1) / 2) * (1.2 / Math.max(1, n - 1)) * 1.4);
+          e.windup(0.95 * wk, { kind: 'fan', len: 11 * 0.75, width: laneW(0.42), angles: e.data.cres }, 'cast', 'crescent'); return;
+        }
         if (art === 'seals') { e.windup(0.55, null, 'cast', 'seals'); return; }
-        if (art === 'mirage') { const spread = 0.55; e.data.lanes = [a - spread, a, a + spread]; e.windup(0.85 * wk, { kind: 'fan', len: 8.5, width: 0.7, angles: e.data.lanes }, 'iaiCrouch', 'mirage'); return; }
+        if (art === 'mirage') { const spread = 0.55; e.data.lanes = [a - spread, a, a + spread]; e.windup(0.85 * wk, { kind: 'fan', len: 17 * 0.42, width: MIRAGE_W, angles: e.data.lanes }, 'iaiCrouch', 'mirage'); return; }
       }
       // keep a duelling distance: close in when far, circle when near
       const s = Math.sin(g.time * 0.7 + e.seed) > 0 ? 1 : -1;
@@ -661,17 +788,14 @@ export const BEHAVIORS = {
         if (e.phase === 3 && !e.data.chained) { // a second, faster flash straight after
           e.data.chained = true;
           const [dx, dy, d] = e.toPlayer(); e.face(dx, dy);
-          e.windup(0.55, { kind: 'line', len: clamp(d + 2, 4, 9), width: 0.85, angle: Math.atan2(dy, dx), track: true }, 'iaiCrouch', 'iai');
+          e.windup(0.55, { kind: 'line', len: clamp(d + 2, 4, 9), width: 1.5, angle: Math.atan2(dy, dx), track: true }, 'iaiCrouch', 'iai');
           return;
         }
         e.data.chained = false;
         e.t = 0.8;
       } else if (next === 'crescent') {
-        const n = e.phase === 1 ? 3 : e.phase === 2 ? 4 : 5;
-        const base = Math.atan2(e.faceY, e.faceX);
-        for (let k = 0; k < n; k++) {
-          const a = base + (k - (n - 1) / 2) * (1.2 / Math.max(1, n - 1)) * 1.4;
-          g.spawnProjectile({ owner: 'enemy', kind: 'crescent', x: e.x, y: e.y, z: 0.7, vx: Math.cos(a) * 11, vy: Math.sin(a) * 11, dmg: BOSS_DMG.gensai.crescent, r: 0.42, life: 3.2, boomer: { owner: e, t: 0, out: 0.75 } });
+        for (const a of e.data.cres || [Math.atan2(e.faceY, e.faceX)]) { // (along the lanes shown at the windup)
+          g.spawnProjectile({ owner: 'enemy', src: e, kind: 'crescent', x: e.x, y: e.y, z: 0.7, vx: Math.cos(a) * 11, vy: Math.sin(a) * 11, dmg: BOSS_DMG.gensai.crescent, r: 0.42, life: 3.2, boomer: { owner: e, t: 0, out: 0.75 } });
         }
         sfx.iaiCut(); g.shake(4);
         g.fx.ring(e.x, e.y, 1.6, 'rgba(255,120,140,0.9)', 0.35, 6);
@@ -701,7 +825,7 @@ export const BEHAVIORS = {
     custom: (e, dt, g) => {
       if (e.state === 'gdash') {
         e.t -= dt;
-        if (!e.data.hit && e.hurtInLane(1.2, BOSS_DMG.gensai.mirage, 8)) e.data.hit = true;
+        if (!e.data.hit && e.hurtInLane(MIRAGE_W, BOSS_DMG.gensai.mirage, 8)) e.data.hit = true;
         if (Math.random() < 0.9) g.particles.emit('ink', e.x, e.y, 0.8, 0, 0, 0, 0.35, 6, 'rgba(120,10,30,0.6)');
         if (e.t <= 0) { e.vx *= 0.1; e.vy *= 0.1; e.state = 'recover'; e.t = 0.6; }
       } else if (e.state === 'summon') {
@@ -709,7 +833,7 @@ export const BEHAVIORS = {
         if (Math.random() < 0.6) g.particles.emit('glow', e.x + rand(-1, 1), e.y + rand(-1, 1), rand(0.2, 1.6), 0, 0, 1, 0.6, 2.2, '#ffcf6a');
         if (e.t <= 0) {
           const alive = g.enemies.filter((o) => !o.dead && !o.boss).length;
-          const n = Math.min([0, 3, 4, 5][e.phase] + (g.players.length > 1 ? 1 : 0), 9 - alive);
+          const n = Math.min(coopCount(g, [0, 3, 4, 5][e.phase]), 9 - alive);
           for (let k = 0; k < n; k++) g.later(k * 0.25, () => { if (!e.dead) g.spawnEnemy(pick(GENSAI_GUARD)); });
           e.state = 'recover'; e.t = 0.5;
         }
@@ -718,6 +842,19 @@ export const BEHAVIORS = {
   },
 };
 
+// the Tengu's flock: four wind swallows and two crow archers swoop in around him
+function tenguFlock(g, e) {
+  const flock = ['tsubame', 'tsubame', 'tsubame', 'tsubame', 'karasu', 'karasu'];
+  while (flock.length < coopCount(g, 6)) flock.push(flock.length % 2 ? 'karasu' : 'tsubame'); // (co-op: x1.4)
+  for (const [k, type] of flock.entries()) {
+    const a = (k / flock.length) * TAU + rand(-0.3, 0.3);
+    let x = e.x + Math.cos(a) * 3, y = e.y + Math.sin(a) * 3;
+    if (g.world.blocked(x, y, 0.4)) [x, y] = g.world.randomFreePoint(e.x, e.y, 4);
+    g.addEnemy(new Enemy(g, type, x, y, g.level));
+    g.particles.burst('feather', x, y, 1.2, 6, 3, 0.8, 3, type === 'karasu' ? '#26232e' : '#1e2a50');
+  }
+  sfx.bossRoar();
+}
 function startRoninDash(e) {
   const [dx, dy] = e.toPlayer(); e.face(dx, dy);
   e.windup(e.phase === 2 ? 0.26 : 0.38, { kind: 'line', len: 4.6, width: 0.9, angle: Math.atan2(dy, dx) }, 'windup', 'dash');
@@ -731,6 +868,8 @@ function gashaWind(e, dur) {
 }
 
 // Tengu feather fan: n lanes across the spread minus two neighbouring lanes (the safe gap)
+const KOMAINU_WAVE = 4.6, RING_W = 0.45; // the komainu's landing shockwave: how far it rolls (and the ring's half-width)
+const TENGU_DIVE_R = 3.0; // the tengu's dive: the size of the landing
 function tenguFan(e, base, shift) {
   e.data.fanBase = base;
   const n = e.phase === 2 ? 11 : 9, spread = 1.6;
@@ -741,7 +880,7 @@ function tenguFan(e, base, shift) {
   return out;
 }
 function fireFan(e, g, angles) {
-  for (const a of angles) g.spawnProjectile({ owner: 'enemy', kind: 'feather', x: e.x, y: e.y, z: e.z + 0.6, vx: Math.cos(a) * 7.5, vy: Math.sin(a) * 7.5, dmg: BOSS_DMG.tengu.feather, r: 0.18, life: 2.2 });
+  for (const a of angles) g.spawnProjectile({ owner: 'enemy', src: e, kind: 'feather', x: e.x, y: e.y, z: e.z + 0.6, vx: Math.cos(a) * 7.5, vy: Math.sin(a) * 7.5, dmg: BOSS_DMG.tengu.feather, r: 0.18, life: 2.2 });
   sfx.throwKnife();
 }
 
@@ -756,6 +895,7 @@ const P = {
   sumo: { skin: '#e8b890', cloth: '#e8b890', cloth2: '#e8b890', sash: '#3a2a50', hair: '#1a1414' },
   samurai: { skin: '#e2b48c', cloth: '#24304e', cloth2: '#3a5a8a', sash: '#c8a050', accent: '#c8a050', metal: '#e6edf5' },
   kappa: { skin: '#5f9a5a' },
+  hunter: { skin: '#d8b08a', cloth: '#5a4a3a', cloth2: '#8a6a44', sash: '#3a2a20', accent: '#b8302a', metal: '#3a3a40', wood: '#5a3a22', hat: '#c8b078' },
   karasu: { skin: '#e8c8a0', cloth: '#2a2838', cloth2: '#1a1824', sash: '#c8302a', hood: '#1e1c26', metal: '#ddd', wood: '#3a2a1a' },
   kitsune: { skin: '#f4e8dc', cloth: '#f2ede4', cloth2: '#d8d0c4', sash: '#c8302a', hair: '#f4f0e8', tail: '#f0a040', metal: '#ffd8a0' },
   yamabushi: { skin: '#ecc8a0', cloth: '#e8e0c8', cloth2: '#6a7a5a', sash: '#c8302a', metal: '#ccc', accent: '#c33' },
@@ -768,6 +908,7 @@ const P = {
   frostoni: { skin: '#5a8ac8', hair: '#e8f4ff', cloth: '#5a8ac8', cloth2: '#2a3a50', sash: '#2a3a50', eye: '#bff4ff', club: '#a8d8f0' },
   ronin_boss: { skin: '#e2b48c', cloth: '#2a2630', cloth2: '#8a2a24', accent: '#c8a050', sash: '#c8a050', metal: '#e6edf5', wood: '#2a1a12' },
   tengu: { skin: '#c8302a', cloth: '#e8e0d0', cloth2: '#4a3a6a', sash: '#c83a2a', metal: '#ddd' },
+  banner: { skin: '#e2b48c', cloth: '#7a3a22', cloth2: '#3a2418', sash: '#e8b050', hat: '#2a2a30', accent: '#d8642a', metal: '#e0e6ee', wood: '#5a3a20' },
   tate: { skin: '#e2b48c', cloth: '#6a3a2a', cloth2: '#3a2418', sash: '#d8c070', hat: '#2a2a30', accent: '#c33', metal: '#e0e6ee', wood: '#5a3a20' },
   ironguard: { skin: '#e2b48c', cloth: '#2e2e36', cloth2: '#5a5e6a', sash: '#a83a2a', accent: '#d8c070', metal: '#e6edf5' },
   shellguard: { skin: '#4f7a4a' },
@@ -793,10 +934,13 @@ const P = {
 };
 const drawing = (e) => (e.state === 'windup' ? { kind: 'draw', t: 1 - e.t / e.tDur } : null);
 const casting = (e) => (e.state === 'windup' ? { kind: 'cast', t: 1 - e.t / e.tDur } : null);
+// Kurogane's great whirl: its radius in tiles (was 5)
+const RONIN_WHIRL = 7.5;
 const oniBody = { head: 'oni', weapon: 'club', grip: 'shoulder', bareChest: true, bareArms: true, tigerCloth: true };
 
 export const LOOKS = {
   bandit: () => ({ pal: P.bandit, head: 'bandana', weapon: 'katana', grip: 'down' }),
+  banner: () => ({ pal: P.banner, head: 'jingasa', weapon: 'tanto', grip: 'down', draw: drawBannerBearer }),
   tate: (e) => ({ pal: P.tate, head: 'jingasa', weapon: 'tanto', grip: 'down', s: 1.05, pose: e.state === 'charge' ? { kind: 'thrust', t: 0.5 } : null }),
   ironguard: () => ({ pal: P.ironguard, head: 'kabuto', armor: true, weapon: 'katana', grip: 'down', s: 1.3, fat: 1.2, h: 74, shieldS: 1.05 }),
   spear: (e) => ({ pal: P.spear, head: 'jingasa', weapon: 'spear', grip: 'pole', pose: e.state === 'lunge' ? { kind: 'thrust', t: 0.5 } : null }),
@@ -810,6 +954,8 @@ export const LOOKS = {
   shellguard: (e) => ({ pal: P.shellguard, draw: drawKappa, h: 46, s: 1.1, crouch: e.state === 'charge' ? 0.5 : 0, attack: e.pose ? 1 : 0, shieldS: 0.85 }),
   barkwarden: (e) => ({ pal: P.barkwarden, head: 'kodama', robe: true, fat: 1.35, s: 1.3, h: 72, armW: 1.3, shieldS: 1.1, pose: e.state === 'recover' && e.pose ? e.pose : null }),
   kamaitachi: () => ({ draw: drawWeasel, h: 30 }),
+  tsubame: () => ({ draw: drawSwallow, h: 46 }),
+  hunter: (e) => ({ pal: P.hunter, head: 'kasa', weapon: 'rifle', grip: e.state === 'windup' ? 'forward' : 'shoulder', mantle: true, pose: e.state === 'windup' ? { kind: 'shoot', t: clamp(1 - e.t / (e.tDur || 1), 0, 1) } : e.state === 'settrap' ? { kind: 'cast', t: 0.6 } : null }),
   karasu: (e) => ({ pal: P.karasu, head: 'crow', weapon: 'bow', grip: 'down', wings: true, smallWings: true, flapSpeed: 9, pose: drawing(e) }),
   kitsune: () => ({ pal: P.kitsune, head: 'fox', robe: true, tails: 3, weapon: 'tanto', grip: 'down', shimmer: true }),
   tanuki: () => ({ draw: drawTanuki, h: 46 }),
@@ -847,7 +993,7 @@ export const LOOKS = {
   naginata: (e) => ({ pal: P.naginata, head: 'bandana', robe: true, weapon: 'naginata', grip: 'pole', pose: e.state === 'lunge' ? { kind: 'thrust', t: 0.5 } : null }),
   shurikenka: (e) => ({ pal: P.shurikenka, head: 'mask', weapon: 'kunai', grip: 'down', pose: e.state === 'windup' ? { kind: 'throw', side: 1, t: 1 - e.t / e.tDur } : null }),
   sensei: (e) => ({ pal: P.sensei, head: 'hermit', weapon: 'nodachi', grip: 'shoulder', s: 1.4, fat: 1.1, h: 80, pose: e.state === 'iaido' ? { kind: 'thrust', t: 0.5 } : null }),
-  scholar: (e) => ({ pal: P.scholar, head: 'tokin', robe: true, weapon: 'spiritorb', grip: 'down', pose: casting(e) }),
+  scholar: (e) => ({ pal: P.scholar, head: 'tokin', robe: true, weapon: 'book', grip: 'down', pose: casting(e) }),
   sage: (e) => ({ pal: P.sage, head: 'hermit', robe: true, weapon: 'staff', grip: 'pole', pose: casting(e) }),
   dummy: () => ({ draw: drawDummy, h: 72 }),
   gensai: (e) => ({
@@ -858,3 +1004,28 @@ export const LOOKS = {
       : e.state === 'summon' ? { kind: 'cast', t: 0.5 } : null,
   }),
 };
+
+// the Banner Bearer: a tall nobori on a pole strapped to his back (drawn behind him), orange with a white crest,
+// rippling in the wind, then the soldier himself
+function drawBannerBearer(ctx, o) {
+  const h = o.h || 56, s = o.s || 1, dir = Math.cos(o.facing) >= 0 ? 1 : -1, t = o.time || 0;
+  const sx = o.x, sy = o.y - (o.z || 0);
+  ctx.save(); ctx.globalAlpha *= o.alpha ?? 1;
+  const px = sx - dir * h * 0.1 * s, base = sy - h * 0.5 * s, top = sy - h * 1.62 * s;
+  ctx.strokeStyle = '#2a1e16'; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(px, base); ctx.lineTo(px, top); ctx.stroke();
+  ctx.strokeStyle = '#6a4a2a'; ctx.lineWidth = 2; ctx.stroke();
+  const w = h * 0.3 * s, hh = h * 0.78 * s, x0 = px - dir * 1.5, y0 = top + 4;
+  ctx.lineWidth = 3; ctx.strokeStyle = '#2a1e16'; ctx.beginPath(); ctx.moveTo(px, y0); ctx.lineTo(px - dir * w, y0); ctx.stroke(); // the crossbar
+  ctx.beginPath(); ctx.moveTo(x0, y0);
+  for (let k = 0; k <= 8; k++) { const f = k / 8; ctx.lineTo(x0 - dir * w * f, y0 + Math.sin(t * 4 + f * 2) * 1.2 * f); }
+  for (let k = 0; k <= 10; k++) { const f = k / 10; ctx.lineTo(x0 - dir * w + Math.sin(t * 4.5 + f * 3) * 3 * f, y0 + hh * f); }
+  for (let k = 8; k >= 0; k--) { const f = k / 8; ctx.lineTo(x0 - dir * w * f + Math.sin(t * 4.5 + 3) * 3 * f, y0 + hh + Math.sin(t * 5 + f * 3) * 2 * f); }
+  ctx.closePath(); ctx.fillStyle = '#e0702e'; ctx.fill(); ctx.strokeStyle = '#2a1e16'; ctx.lineWidth = 1.5; ctx.stroke();
+  // a white crest near the top, and a dark band at the bottom
+  const cx = x0 - dir * w * 0.5 + Math.sin(t * 4.5 + 0.6) * 0.8, cy = y0 + hh * 0.24;
+  ctx.fillStyle = '#fbf2e2'; ctx.beginPath(); ctx.arc(cx, cy, w * 0.3, 0, TAU); ctx.fill();
+  ctx.fillStyle = '#e0702e'; ctx.beginPath(); ctx.arc(cx, cy, w * 0.13, 0, TAU); ctx.fill();
+  ctx.fillStyle = 'rgba(90,30,14,0.55)'; ctx.fillRect(Math.min(x0, x0 - dir * w) + 1, y0 + hh * 0.82, w - 2, hh * 0.08);
+  ctx.restore();
+  drawHumanoid(ctx, o);
+}

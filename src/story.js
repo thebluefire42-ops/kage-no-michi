@@ -143,9 +143,26 @@ export const SCRIPTS = {
   ],
 
   // ------------------------------------------------ area 4: the fortress
+  // cutscene before level 31 (cutscene4.js): from Yukishiro through the ash fields to the fortress wall, then over it on a grappling rope.
+  // at: the line waits until the players have walked that far; delay: seconds before the box shows; act: cues the scene
+  area4: [
+    { who: 'kage', coop: true, at: 0.35, text: 'Yukishiro is behind us. Only the fortress lies ahead.' },
+    { who: 'kage', solo: true, at: 0.35, text: 'Yukishiro is behind me. Only the fortress lies ahead.' },
+    { who: 'kaze', coop: true, at: 0.75, text: "The snow turns to ash this close to Gensai's forges." },
+    { who: 'kage', coop: true, at: 1.25, text: 'The gate is barred. We go over the wall, the old way.' },
+    { who: 'kage', solo: true, at: 1.25, text: 'The gate is barred. I go over the wall, the old way.' },
+    { who: 'kage', act: 'grapple', text: 'Quietly now. Gensai will never know we came.' , coop: true },
+    { who: 'kage', act: 'grapple', text: 'Quietly now. Gensai will never know I came.', solo: true },
+  ],
+  // level 31: the ambush (game.js holds the first wave until these lines are done)
   level31: [
-    { who: 'fcaptain', text: 'The exile is inside the walls! Sound the alarm! No one leaves alive!' },
-    { who: 'kage', text: 'These halls were my home.' },
+    { who: 'kage', solo: true, text: 'It is quiet… too quiet.' },
+    { who: 'kaze', coop: true, text: "It's quiet… too quiet." },
+  ],
+  // (a few seconds later)
+  level31b: [
+    { who: 'fcaptain', solo: true, text: 'The exile is here! Get him!' },
+    { who: 'fcaptain', coop: true, text: 'The exiles are here! Get them!' },
   ],
   level32: [
     { who: 'honorguard', text: 'None reach the regent\'s hall. None.' },

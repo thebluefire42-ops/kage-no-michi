@@ -14,6 +14,7 @@ export function initAudio() {
       const d = noiseBuf.getChannelData(0);
       for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
     }
+    loadSamples();
     if (ctx.state === 'suspended') ctx.resume().then(syncMusic, () => {});
     syncMusic();
   } catch (e) { /* audio unavailable */ }
@@ -25,7 +26,7 @@ export function initAudio() {
 // and they crossfade, so the loop point is a smooth mix instead of a hard cut.
 // muffle(true) closes a low-pass filter so only the low end comes through (menus, dialogue).
 //
-// Each area plays the tense version of its song (biome_N_tense; the chill versions were dropped).
+// Each area plays one mixed song (biome_N), started by the area's opening scene.
 // The mood-switch code below still handles a biome_N_chill / biome_N_tense pair if one is added: a mood change
 // waits for the next bar of the playing version, then:
 //  -> tense: the tense version comes in at its drop (or where it was left, if that was recent) with an
@@ -35,15 +36,16 @@ export function initAudio() {
 // Cue points (tempo, first beat, drop, end of intro) come from analysing the tracks: MUSIC_CUES.
 const TRACKS = {
   main_menu: 'music/main_menu.mp3',
-  biome_1_tense: 'music/biome_1_tense.mp3', biome_2_tense: 'music/biome_2_tense.mp3', biome_3_tense: 'music/biome_3_tense.mp3',
-  biome_2_chill: 'music/biome_2_chill.mp3', // only for the area 2 cutscene, carrying on into level 11 (see game.updateMusic)
+  // one mixed song per area, starting with the area's opening scene (intro cutscene / area 2 cutscene /
+  // level 21 and 31 boss previews) and playing on through the area
+  biome_1: 'music/biome_1.mp3', biome_2: 'music/biome_2.mp3', biome_3: 'music/biome_3.mp3', biome_4: 'music/biome_4.mp3',
 };
 // bpm, beat0 = first downbeat (s), drop = where the tense action starts, introEnd = where the chill song settles,
 // start = skip the near-silent lead-in when the song starts fresh, skip = quiet breakdowns a tense version jumps over (crossfading to the end of the range), end = loop point
 export const MUSIC_CUES = {
-  biome_1_tense: { bpm: 171.5, beat0: 0.125, start: 0.4, drop: 22.5 },
-  biome_2_tense: { bpm: 120, beat0: 0.475, drop: 38.48 },
-  biome_3_tense: { bpm: 88.75, beat0: 0.075, drop: 43.34 },
+  // these two end in a long silence: loop from the last sound, slowly mixing the top of the song in under the ending
+  biome_1: { start: 1.0, end: 424.2, xf: 9 },
+  biome_3: { start: 0.2, end: 409.2, xf: 9 },
 };
 const MUSIC_VOL = 0.5, FADE_IN = 1.4, FADE_OUT = 1.0, OPEN_HZ = 20000, MUFFLED_HZ = 480, LOOP_XF = 4;
 const TENSE_IN = 0.9, TENSE_OUT = 2.4;    // into tense: fast, punchy
@@ -98,7 +100,8 @@ function loopTick() {
     if (el.paused || !isFinite(d) || d < LOOP_XF * 3) continue;
     const cue = MUSIC_CUES[T.name], t = el.currentTime;
     const end = Math.min(d, (cue && cue.end) || d); // songs play straight through (no jumps), looping at the end
-    if (end - t <= LOOP_XF) {
+    const XF = (cue && cue.xf) || LOOP_XF;
+    if (end - t <= XF) {
       const xf = Math.max(0.5, end - t);
       T.cur = 1 - T.cur;
       startVoice(T.voices[T.cur], xf, (cue && cue.start) || 0); // loop back to the top of the song
@@ -238,6 +241,34 @@ export const music = {
   get filterHz() { return mus.filter ? Math.round(mus.filter.frequency.value) : null; },
 };
 
+function rand01(a, b) { return a + Math.random() * (b - a); }
+// ---------------------------------------------------------------- recorded samples (menu clicks)
+// Each is scaled on load so its loudest point sits at `peak` (before the master gain), whatever level the
+// file was exported at. Until a sample has loaded, its sound falls back to the old synth tone.
+const SAMPLES = {
+  uiMove: { url: 'sfx/menu_click_default.mp3', peak: 0.13 },    // moving through menu items
+  uiSelect: { url: 'sfx/menu_click_activate.mp3', peak: 0.2 }, // selecting something
+};
+const samples = {};
+function loadSamples() {
+  if (loadSamples.done) return; loadSamples.done = true;
+  for (const [k, S] of Object.entries(SAMPLES)) {
+    fetch(S.url).then((r) => r.arrayBuffer()).then((b) => ctx.decodeAudioData(b)).then((buf) => {
+      let pk = 0;
+      for (let c = 0; c < buf.numberOfChannels; c++) { const d = buf.getChannelData(c); for (let i = 0; i < d.length; i++) pk = Math.max(pk, Math.abs(d[i])); }
+      samples[k] = { buf, gain: pk > 0 ? S.peak / pk : 0 };
+    }).catch(() => {});
+  }
+}
+function playSample(k, vol = 1) {
+  const S = samples[k]; if (!S) return false;
+  const src = ctx.createBufferSource(); src.buffer = S.buf;
+  const g = ctx.createGain(); g.gain.value = S.gain * vol;
+  src.connect(g); g.connect(master); src.start();
+  return true;
+}
+export const sampleInfo = () => Object.fromEntries(Object.entries(samples).map(([k, S]) => [k, { dur: +S.buf.duration.toFixed(3), gain: +S.gain.toFixed(3) }]));
+
 function ready() { return ctx && ctx.state === 'running'; }
 
 function noise(dur, freq, q, gain, type = 'bandpass', sweepTo = null, delay = 0) {
@@ -287,13 +318,31 @@ export const sfx = {
   explode() { if (!ready() || !throttle('explode', 60)) return; noise(0.6, 600, 0.5, 0.6, 'lowpass', 50); tone(70, 0.45, 'sine', 0.5, 30); },
   clang() { if (!ready() || !throttle('clang', 60)) return; tone(1650, 0.16, 'square', 0.06, 1400); tone(2470, 0.12, 'triangle', 0.08, 2200); noise(0.05, 4000, 2, 0.15); },
   slam() { if (!ready()) return; noise(0.5, 400, 0.5, 0.6, 'lowpass', 40); tone(55, 0.5, 'sine', 0.6, 30); },
+  rifle() { if (!ready()) return; noise(0.18, 2200, 0.8, 0.55, 'bandpass', 500); noise(0.7, 260, 0.7, 0.42, 'lowpass', 60, 0.01); tone(90, 0.22, 'square', 0.12, 40); },
+  // thunder: a sharp crack and a long rolling rumble (far: only a quieter, later rumble)
+  thunder(far = false) { // deep and heavy: a crack (close only), then a long sub-bass roll that swells and fades
+    if (!ready() || !throttle(far ? 'thunderFar' : 'thunder', 120)) return;
+    const g = far ? 0.32 : 0.8, d = far ? 0.4 : 0;
+    if (!far) { noise(0.28, 1800, 0.7, 0.45, 'highpass', 500); noise(0.6, 600, 0.6, 0.4, 'bandpass', 120, 0.02); }
+    noise(3.2, 160, 0.7, g, 'lowpass', 30, d);
+    noise(2.6, 70, 1.0, g * 0.95, 'lowpass', 25, d + 0.25);
+    tone(38, 2.6, 'sine', g * 0.7, 24, d + 0.08, 0.12);
+    tone(52, 1.8, 'triangle', g * 0.35, 30, d + 0.3, 0.2);
+  },
+  // a distant storm, always rolling low under a Storm level
+  rumble() { if (!ready() || !throttle('rumble', 900)) return; const g = rand01(0.1, 0.18); noise(4, 90, 0.9, g, 'lowpass', 28); tone(34, 3.4, 'sine', g * 0.8, 26, 0.2, 0.8); },
   death() { if (!ready() || !throttle('death', 40)) return; noise(0.3, 900, 0.8, 0.22, 'bandpass', 200); },
   hurt() { if (!ready()) return; tone(240, 0.22, 'sawtooth', 0.18, 90); noise(0.1, 800, 1, 0.25); },
   enemyShoot() { if (!ready() || !throttle('eshoot', 60)) return; tone(700, 0.08, 'square', 0.06, 300); },
   spawn() { if (!ready() || !throttle('spawn', 80)) return; noise(0.35, 500, 0.6, 0.15, 'bandpass', 2000); },
   flip() { if (!ready()) return; noise(0.06, 3500, 1.2, 0.18, 'bandpass', 1500); },
-  select() { if (!ready()) return; tone(880, 0.12, 'triangle', 0.18); tone(1320, 0.18, 'triangle', 0.12, null, 0.05); },
-  move() { if (!ready() || !throttle('move', 60)) return; tone(520, 0.05, 'triangle', 0.1); },
+  // menus: selecting something / moving through items (recorded clicks, see SAMPLES)
+  select() { if (!ready() || !throttle('select', 40)) return; if (!playSample('uiSelect')) { tone(880, 0.12, 'triangle', 0.18); tone(1320, 0.18, 'triangle', 0.12, null, 0.05); } },
+  move() { if (!ready() || !throttle('move', 60)) return; if (!playSample('uiMove')) tone(520, 0.05, 'triangle', 0.1); },
+  // a reroll token spent: a bright little coin clink
+  coin() { if (!ready() || !throttle('coin', 60)) return; tone(2350, 0.09, 'triangle', 0.07); tone(3520, 0.16, 'sine', 0.045, null, 0.035); tone(1760, 0.12, 'triangle', 0.035, null, 0.07); },
+  // in-world: taking a scroll from the altar, a player rejoining (the old two-note chime)
+  take() { if (!ready()) return; tone(880, 0.12, 'triangle', 0.18); tone(1320, 0.18, 'triangle', 0.12, null, 0.05); },
   gong() {
     if (!ready()) return;
     [110, 220.5, 331, 443].forEach((f, i) => tone(f, 2.2 - i * 0.3, 'sine', 0.22 / (i + 1), f * 0.99));
@@ -358,6 +407,32 @@ export const sfx = {
     tone(f, 1.4, 'sine', 0.085, f * 0.998, 0, 0.004); tone(f * 1.004, 1.2, 'sine', 0.05, null, 0.01);
     tone(f * 2.76, 0.8, 'sine', 0.032, f * 2.75, 0, 0.004); tone(f * 5.4, 0.35, 'sine', 0.014, null, 0, 0.004);
   },
+  // kunai pulled back out of an enemy: a sharp, bright metal "shing"
+  kunaiPull() {
+    if (!ready() || !throttle('kpull', 60)) return;
+    noise(0.09, 7500, 2.5, 0.16, 'highpass', 4200);
+    tone(3400, 0.16, 'square', 0.035, 2600, 0, 0.002); tone(5200, 0.12, 'sine', 0.05, 4700, 0.005, 0.002);
+    tone(2300, 0.22, 'triangle', 0.04, 2150, 0.02, 0.003);
+  },
+  // spirit orb: a wisp leaves the orb with a hollow, falling moan; a tether takes hold with a soft glassy shiver
+  wisp() {
+    if (!ready() || !throttle('wisp', 80)) return;
+    tone(520, 0.55, 'sine', 0.05, 330, 0, 0.06); tone(784, 0.45, 'triangle', 0.018, 523, 0.03, 0.08);
+    noise(0.4, 1800, 4, 0.03, 'bandpass', 900);
+  },
+  haunt() {
+    if (!ready() || !throttle('haunt', 90)) return;
+    tone(1320, 0.3, 'sine', 0.025, 1180); tone(1980, 0.22, 'sine', 0.012, 1760, 0.03);
+  },
+  // spirit orb special: the fallen rise (a low swell under a rising, wavering choir)
+  summon() {
+    if (!ready() || !throttle('summon', 200)) return;
+    tone(110, 1.2, 'sine', 0.09, 165, 0, 0.15);
+    for (let i = 0; i < 3; i++) tone(330 * (1 + i * 0.5), 1.0, 'triangle', 0.022, 440 * (1 + i * 0.5), 0.1 + i * 0.08, 0.2);
+    noise(0.9, 2400, 2, 0.04, 'bandpass', 600);
+  },
+  // a spirit ally fades away
+  fade() { if (!ready() || !throttle('fade', 120)) return; tone(660, 0.7, 'sine', 0.04, 220, 0, 0.02); noise(0.5, 3000, 2, 0.025, 'bandpass', 800); },
   // bo: a wooden "tok", one step higher with each hit of the combo
   tok(step = 0) {
     if (!ready() || !throttle('tok', 30)) return;

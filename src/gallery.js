@@ -37,7 +37,7 @@ export class CardGallery {
   // the cards of the current type at the current rarity: [{ card, player }]
   build() {
     const T = TYPES[this.type].key, r = this.rarity, list = [];
-    if (T === 'stat') for (const k of Object.keys(UPGRADES)) list.push({ card: { type: 'stat', stat: k, key: k, rarity: r, value: UPGRADES[k].values[r] }, player: this.player() });
+    if (T === 'stat') for (const k of Object.keys(UPGRADES)) if (UPGRADES[k].offer !== false) list.push({ card: { type: 'stat', stat: k, key: k, rarity: r, value: UPGRADES[k].values[r] }, player: this.player() });
     if (T === 'element') for (const e of Object.keys(ELEMENTS)) list.push({ card: { type: 'element', element: e, slot: 0, key: e, rarity: r, value: ELEMENTS[e].values[r] }, player: this.player() });
     if (T === 'item') for (const k of Object.keys(ITEM_CARDS)) list.push({ card: { type: k, key: k, rarity: r, value: ITEM_CARDS[k].values[r] }, player: this.player() });
     if (T === 'talent') for (const k of Object.keys(TALENTS)) list.push({ card: { type: 'talent', talent: k, kind: 'new', key: k, rarity: r, value: TALENT_POWER[r] }, player: this.player() });

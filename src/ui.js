@@ -1,7 +1,9 @@
 // HUD, title screen, weapon select (solo/co-op), pause, end screens, banners, boss intro and the F3 debug overlay.
+import { MAX_TALENTS } from './config.js';
 import { TAU, clamp, lerp, ease, seededRng } from './util.js';
 import { WEAPONS, WEAPON_ORDER, UPGRADES, PLAYER_BASE, ELEMENTS, PLAYER_COLORS } from './config.js';
-import { drawWeapon, INK } from './rig.js';
+import { drawWeapon, drawHumanoid, INK } from './rig.js';
+import { EQUIPMENT } from './equipment.js';
 import { input } from './input.js';
 import { sfx, music } from './audio.js';
 import { fmtStat, drawIcon, drawCard } from './cards.js';
@@ -13,14 +15,14 @@ import { hasPadToken, richWidth, drawRich, drawPadButton } from './padicons.js';
 import { CardGallery } from './gallery.js';
 
 // stats in display order, and how each one reads on screen
-const STAT_ORDER = ['baseDamage', 'critChance', 'critDamage', 'moveSpeed', 'cooldown', 'energyRegen', 'kiCost', 'healthRegen'];
+const STAT_ORDER = ['baseDamage', 'critChance', 'critDamage', 'cooldownMul', 'moveSpeed', 'dashCd', 'kiCost', 'healthRegen']; // (energy regen has no cards any more)
 // move speed is shown with the weapons' own speed included
-const statText = (p, k) => (k === 'moveSpeed' ? `${Math.round(p.stats.moveSpeed * (p.weaponMove || 1) * 100)}%` : fmtStat(k, p.stats[k]));
+const statText = (p, k) => (k === 'moveSpeed' ? `${Math.round(p.stats.moveSpeed * (p.weaponMove || 1) * 100)}%` : k === 'dashCd' ? `${p.dashCooldown.toFixed(1)}s` : fmtStat(k, p.stats[k]));
 
 const FONT_SERIF = '"Shippori Mincho", serif';
 const FONT_SANS = '"Zen Kaku Gothic New", sans-serif';
 const WPAL = { metal: '#e6edf5', wood: '#8a5a32', accent: '#c0392b' };
-const WICON = { katanas: 'katana', crossbow: 'crossbow', heavy: 'nodachi', knives: 'kunai', staff: 'holystaff', bo: 'bo', shield: 'shield_icon' };
+const WICON = { katanas: 'katana', crossbow: 'crossbow', heavy: 'nodachi', knives: 'kunai', staff: 'holystaff', bo: 'bo', shield: 'shield_icon', orb: 'orb_icon', gloves: 'gauntlet' };
 const INTRO_DUR = 4.8;
 const NW = WEAPON_ORDER.length;
 
@@ -64,8 +66,15 @@ function brushBar(ctx, x, y, w, h, k, fill, back, trail = null) {
 function drawSpecialIcon(ctx, key, s, color) {
   ctx.save(); ctx.scale(s, s); ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 2.4; ctx.lineCap = 'round';
   switch (key) {
-    case 'katanas':
-      for (let i = 0; i < 2; i++) { ctx.beginPath(); ctx.arc(0, 0, 11, i * Math.PI + 0.3, i * Math.PI + 2.6); ctx.stroke(); const a = i * Math.PI + 2.6; ctx.beginPath(); ctx.moveTo(Math.cos(a) * 11, Math.sin(a) * 11); ctx.lineTo(Math.cos(a) * 11 + Math.cos(a + 1.2) * 5, Math.sin(a) * 11 + Math.sin(a + 1.2) * 5); ctx.stroke(); }
+    case 'katanas': // Blade Waltz: a zigzag of blinks, a slash at every turn
+      ctx.lineWidth = 1.6; ctx.setLineDash([2.5, 3]);
+      ctx.beginPath(); ctx.moveTo(-14, 10); ctx.lineTo(-5, -9); ctx.lineTo(4, 9); ctx.lineTo(13, -10); ctx.stroke(); ctx.setLineDash([]);
+      ctx.lineWidth = 2.6;
+      for (const [x, y, a] of [[-5, -9, 0.6], [4, 9, -0.6], [13, -10, 0.6]]) { ctx.beginPath(); ctx.moveTo(x - Math.cos(a) * 6, y - Math.sin(a) * 6); ctx.lineTo(x + Math.cos(a) * 6, y + Math.sin(a) * 6); ctx.stroke(); }
+      break;
+    case 'gloves': // Earthen Prison: spikes of stone breaking out of the ground
+      for (const [x, h, w] of [[-9, 16, 6], [0, 22, 7], [9, 15, 6]]) { ctx.beginPath(); ctx.moveTo(x - w, 11); ctx.lineTo(x - 1, 11 - h); ctx.lineTo(x + w, 11); ctx.closePath(); ctx.fill(); }
+      ctx.beginPath(); ctx.moveTo(-15, 12); ctx.lineTo(15, 12); ctx.stroke();
       break;
     case 'crossbow':
       for (const a of [-0.35, 0, 0.35]) { ctx.save(); ctx.rotate(a - 0.8); ctx.beginPath(); ctx.moveTo(-12, 0); ctx.lineTo(12, 0); ctx.stroke(); ctx.beginPath(); ctx.moveTo(12, 0); ctx.lineTo(7, -3); ctx.lineTo(7, 3); ctx.fill(); ctx.restore(); }
@@ -74,7 +83,10 @@ function drawSpecialIcon(ctx, key, s, color) {
       ctx.beginPath(); ctx.moveTo(0, -13); ctx.lineTo(0, 4); ctx.stroke(); ctx.beginPath(); ctx.moveTo(-5, -1); ctx.lineTo(0, 6); ctx.lineTo(5, -1); ctx.fill();
       ctx.beginPath(); ctx.ellipse(0, 10, 13, 3.5, 0, 0, TAU); ctx.stroke();
       break;
-    case 'knives':
+    case 'knives': // Blade Storm: kunai flying out all around
+      for (let i = 0; i < 8; i++) { ctx.save(); ctx.rotate(i * TAU / 8 + 0.2); ctx.beginPath(); ctx.moveTo(5, 0); ctx.lineTo(12, 0); ctx.stroke(); ctx.beginPath(); ctx.moveTo(12, -2.2); ctx.lineTo(16.5, 0); ctx.lineTo(12, 2.2); ctx.fill(); ctx.restore(); }
+      break;
+    case 'knivesFan':
       for (let i = -2; i <= 2; i++) { ctx.save(); ctx.rotate(-Math.PI / 2 + i * 0.32); ctx.beginPath(); ctx.moveTo(2, 0); ctx.lineTo(14, 0); ctx.stroke(); ctx.beginPath(); ctx.moveTo(14, -2.5); ctx.lineTo(19, 0); ctx.lineTo(14, 2.5); ctx.fill(); ctx.restore(); }
       break;
     case 'bo': // hourglass (slowed time) with strike marks
@@ -86,6 +98,12 @@ function drawSpecialIcon(ctx, key, s, color) {
       ctx.beginPath(); ctx.arc(0, 0, 12.5, -2.4, -0.7); ctx.stroke(); ctx.beginPath(); ctx.arc(0, 0, 12.5, 0.7, 2.4); ctx.stroke();
       ctx.beginPath(); ctx.arc(0, 0, 12.5, 2.6, 3.7); ctx.stroke(); ctx.beginPath(); ctx.arc(0, 0, 12.5, -0.55, 0.55); ctx.stroke();
       break;
+    case 'orb': // Call the Fallen: a little ghost rising, with its wavy hem
+      ctx.beginPath(); ctx.moveTo(-8, 10); ctx.lineTo(-8, -2); ctx.arc(0, -2, 8, Math.PI, 0); ctx.lineTo(8, 10);
+      for (let i = 0; i < 4; i++) ctx.quadraticCurveTo(6 - i * 4, 6, 4 - i * 4, 10);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = 'rgba(0,0,0,0.75)'; ctx.beginPath(); ctx.arc(-3, -2, 1.7, 0, TAU); ctx.arc(3, -2, 1.7, 0, TAU); ctx.fill();
+      break;
     case 'staff': // healing cross inside a circle
       ctx.beginPath(); ctx.arc(0, 0, 13, 0, TAU); ctx.stroke();
       ctx.fillRect(-2.5, -8, 5, 16); ctx.fillRect(-8, -2.5, 16, 5);
@@ -94,27 +112,106 @@ function drawSpecialIcon(ctx, key, s, color) {
   ctx.restore();
 }
 
+// an element's small mark, the same shapes that drift over its imbuement card (cards.js imbueParticles):
+// a lightning zigzag, a poison bubble, a snowflake, a flame (burn), a drop (arcane), a + (syphon on its card)
+export function drawElementMark(ctx, el, x, y, u, color) {
+  ctx.save(); ctx.translate(x, y); ctx.scale(u, u);
+  ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 1.5; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  if (el === 'lightning') { ctx.beginPath(); ctx.moveTo(-1.5, -6); ctx.lineTo(2.5, -1); ctx.lineTo(-2, 0.5); ctx.lineTo(2, 6); ctx.stroke(); }
+  else if (el === 'poison') { ctx.beginPath(); ctx.arc(-0.5, 1, 3.6, 0, TAU); ctx.stroke(); ctx.beginPath(); ctx.arc(2.6, -4, 1.4, 0, TAU); ctx.stroke(); }
+  else if (el === 'burn') { ctx.beginPath(); ctx.moveTo(-3.5, 5); ctx.quadraticCurveTo(-4.5, -1, 0, -6); ctx.quadraticCurveTo(4.5, -1, 3.5, 5); ctx.closePath(); ctx.fill(); }
+  else if (el === 'ice') { ctx.beginPath(); for (let k = 0; k < 3; k++) { const a = (k * Math.PI) / 3 + Math.PI / 2; ctx.moveTo(-Math.cos(a) * 5.5, -Math.sin(a) * 5.5); ctx.lineTo(Math.cos(a) * 5.5, Math.sin(a) * 5.5); } ctx.stroke(); }
+  else { ctx.beginPath(); ctx.moveTo(0, -6); ctx.quadraticCurveTo(4.2, 0, 0, 4); ctx.quadraticCurveTo(-4.2, 0, 0, -6); ctx.fill(); }
+  ctx.restore();
+}
+
+// the basic-attack slot shows the weapon exactly as on its weapon-select card, centred and fitted to the slot
+// the secondary attack's icon (drawn in a pale steel-blue so the three slots read apart)
+export function drawSecondaryIcon(ctx, key, s, color) {
+  ctx.save(); ctx.scale(s, s); ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 2.4; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  switch (key) {
+    case 'katanas': // Whirlwind: two arcs turning round
+      for (let i = 0; i < 2; i++) { ctx.beginPath(); ctx.arc(0, 0, 11, i * Math.PI + 0.3, i * Math.PI + 2.6); ctx.stroke(); const a = i * Math.PI + 2.6; ctx.beginPath(); ctx.moveTo(Math.cos(a) * 11, Math.sin(a) * 11); ctx.lineTo(Math.cos(a) * 11 + Math.cos(a + 1.2) * 5, Math.sin(a) * 11 + Math.sin(a + 1.2) * 5); ctx.stroke(); }
+      break;
+    case 'crossbow': // a backward leap arrow under a bolt
+      ctx.beginPath(); ctx.moveTo(-12, -6); ctx.lineTo(10, -6); ctx.stroke(); ctx.beginPath(); ctx.moveTo(10, -9); ctx.lineTo(15, -6); ctx.lineTo(10, -3); ctx.fill();
+      ctx.beginPath(); ctx.arc(0, 10, 10, Math.PI * 1.05, Math.PI * 1.95, true); ctx.stroke(); ctx.beginPath(); ctx.moveTo(-10, 9); ctx.lineTo(-13, 4); ctx.lineTo(-6, 5); ctx.fill();
+      break;
+    case 'heavy': // a wide cleave arc with a slow mark under it
+      ctx.lineWidth = 3.2; ctx.beginPath(); ctx.arc(0, 4, 14, Math.PI * 1.1, Math.PI * 1.9); ctx.stroke();
+      ctx.lineWidth = 1.8; for (let i = 0; i < 3; i++) { const a = -Math.PI / 2 + (i - 1) * 0.5; ctx.beginPath(); ctx.moveTo(Math.cos(a) * 3, 8 + Math.sin(a) * 3); ctx.lineTo(Math.cos(a) * 8, 8 + Math.sin(a) * 8); ctx.stroke(); }
+      break;
+    case 'knives': // the fan
+      for (let i = -2; i <= 2; i++) { ctx.save(); ctx.rotate(-Math.PI / 2 + i * 0.32); ctx.beginPath(); ctx.moveTo(2, 0); ctx.lineTo(14, 0); ctx.stroke(); ctx.beginPath(); ctx.moveTo(14, -2.5); ctx.lineTo(19, 0); ctx.lineTo(14, 2.5); ctx.fill(); ctx.restore(); }
+      break;
+    case 'staff': // a narrow wedge of light reaching far
+      ctx.globalAlpha *= 0.5; ctx.beginPath(); ctx.moveTo(-14, 12); ctx.arc(-14, 12, 32, -0.95, -0.55); ctx.closePath(); ctx.fill(); ctx.globalAlpha /= 0.5;
+      ctx.beginPath(); ctx.arc(-14, 12, 32, -0.95, -0.55); ctx.stroke();
+      break;
+    case 'bo': // a planted stick with the jump arcing over it
+      ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(0, 14); ctx.lineTo(0, -6); ctx.stroke();
+      ctx.lineWidth = 2; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.arc(0, -2, 11, Math.PI * 1.05, Math.PI * 1.95); ctx.stroke(); ctx.setLineDash([]);
+      ctx.beginPath(); ctx.moveTo(10, -5); ctx.lineTo(13, 1); ctx.lineTo(7, 0); ctx.fill();
+      break;
+    case 'shield': // a disc on a circular path
+      ctx.beginPath(); ctx.arc(0, 0, 13, 0.5, TAU - 0.3); ctx.stroke(); ctx.beginPath(); ctx.moveTo(13, -4); ctx.lineTo(9, -9); ctx.lineTo(16, -9); ctx.fill();
+      ctx.beginPath(); ctx.arc(12, 6, 4.5, 0, TAU); ctx.fill();
+      break;
+    case 'orb': // the orb falling onto rings on the ground
+      ctx.beginPath(); ctx.arc(0, -8, 5.5, 0, TAU); ctx.fill();
+      ctx.lineWidth = 1.6; ctx.beginPath(); ctx.moveTo(0, -1); ctx.lineTo(0, 3); ctx.stroke();
+      ctx.beginPath(); ctx.ellipse(0, 9, 13, 4, 0, 0, TAU); ctx.stroke(); ctx.beginPath(); ctx.ellipse(0, 9, 7, 2, 0, 0, TAU); ctx.stroke();
+      break;
+    case 'gloves': // a slab of rock leaning up, with an upward strike line
+      ctx.beginPath(); ctx.moveTo(-6, 13); ctx.lineTo(-2, -4); ctx.lineTo(6, -12); ctx.lineTo(10, -2); ctx.lineTo(9, 13); ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(-14, 10); ctx.lineTo(-14, -10); ctx.stroke(); ctx.beginPath(); ctx.moveTo(-17, -6); ctx.lineTo(-14, -12); ctx.lineTo(-11, -6); ctx.fill();
+      break;
+  }
+  ctx.restore();
+}
 function drawBasicIcon(ctx, key, u) {
+  const B = weaponIconBox(key), sc = (32 * u) / Math.max(B.w, B.h, 1);
+  ctx.scale(sc, sc); ctx.translate(-B.x, -B.y);
+  weaponIcon(ctx, key);
+}
+// a weapon's icon as drawn on its select card (unscaled, around the origin)
+export function weaponIcon(ctx, key) {
   const k = WICON[key];
-  if (k === 'shield_icon') { ctx.scale(1.15 * u, 1.15 * u); drawWeapon(ctx, k, 0, 0, 0, WPAL); return; }
-  const pole = k === 'staff' || k === 'holystaff' || k === 'bo';
-  const sc = k === 'kunai' ? 1.8 * u : k === 'nodachi' ? 0.85 * u : k === 'crossbow' ? 1.25 * u : pole ? 0.8 * u : 1.15 * u;
-  ctx.scale(sc, sc);
-  drawWeapon(ctx, k, k === 'crossbow' ? -5 : k === 'kunai' ? -4 : pole ? -14 : -13, k === 'crossbow' ? 0 : pole ? 12 : 9, k === 'crossbow' ? 0 : -0.75, WPAL, 0.6);
+  if (key === 'katanas') { drawWeapon(ctx, 'katana', -12, 8, -0.6, WPAL); drawWeapon(ctx, 'katana', -12, -8, 0.6, WPAL); }
+  else if (key === 'knives') drawWeapon(ctx, 'kunai_volley', 4, 0, -0.35, WPAL);
+  else if (key === 'staff') drawWeapon(ctx, 'holystaff', -8, 0, -0.9, WPAL);
+  else if (key === 'bo') drawWeapon(ctx, 'bo', -4, 4, -0.7, WPAL);
+  else if (key === 'shield') drawWeapon(ctx, 'shield_icon', 0, 0, 0, WPAL);
+  else if (key === 'orb') drawWeapon(ctx, 'orb_icon', 0, 0, 0, WPAL);
+  else if (key === 'gloves') { ctx.save(); ctx.scale(1.6, 1.6); drawWeapon(ctx, 'gauntlet', -6, 4, -0.5, WPAL); drawWeapon(ctx, 'gauntlet', 6, -4, -2.6, WPAL); ctx.restore(); }
+  else if (k === 'nodachi') drawWeapon(ctx, k, 0, 0, -0.55, WPAL);
+  else drawWeapon(ctx, k, -5, 0, 0, WPAL, 0.7);
+}
+// its outline, measured once from the pixels: the middle and the size, so every icon can be centred and fitted
+const ICON_BOX = {};
+export function weaponIconBox(key) {
+  if (ICON_BOX[key]) return ICON_BOX[key];
+  let box = { x: 0, y: 0, w: 40, h: 40 };
+  try {
+    const N = 400, S = 4, c = document.createElement('canvas'); c.width = N; c.height = N;
+    const x = c.getContext('2d'); x.translate(N / 2, N / 2); x.scale(S, S); weaponIcon(x, key);
+    const d = x.getImageData(0, 0, N, N).data; let x0 = N, y0 = N, x1 = -1, y1 = -1;
+    for (let yy = 0; yy < N; yy++) for (let xx = 0; xx < N; xx++) if (d[(yy * N + xx) * 4 + 3] > 30) { if (xx < x0) x0 = xx; if (xx > x1) x1 = xx; if (yy < y0) y0 = yy; if (yy > y1) y1 = yy; }
+    if (x1 >= 0) box = { x: ((x0 + x1) / 2 - N / 2) / S, y: ((y0 + y1) / 2 - N / 2) / S, w: (x1 - x0) / S, h: (y1 - y0) / S };
+  } catch (e) { /* no canvas: draw as is */ }
+  return (ICON_BOX[key] = box);
 }
 
 // cooldown sweep + seconds remaining
-function drawCooldown(ctx, x, y, s, remaining, frac, u) {
+function drawCooldown(ctx, x, y, s, remaining, frac, u, whole = false) {
   if (remaining <= 0.01) return;
+  const c = clamp(frac, 0, 1), mx = x + s / 2, my = y + s / 2;
   ctx.save();
   ctx.beginPath(); ctx.rect(x, y, s, s); ctx.clip();
-  ctx.fillStyle = 'rgba(0,0,0,0.6)';
-  ctx.beginPath(); ctx.moveTo(x + s / 2, y + s / 2); ctx.arc(x + s / 2, y + s / 2, s * 0.75, -Math.PI / 2, -Math.PI / 2 + clamp(frac, 0, 1) * TAU); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = 'rgba(4,2,4,0.62)';
+  ctx.beginPath(); ctx.moveTo(mx, my); ctx.arc(mx, my, s * 0.75, -Math.PI / 2, -Math.PI / 2 + c * TAU); ctx.closePath(); ctx.fill();
   ctx.restore();
-  // bright edge tracking the sweep
-  ctx.strokeStyle = 'rgba(255,230,160,0.9)'; ctx.lineWidth = 2;
-  ctx.beginPath(); ctx.arc(x + s / 2, y + s / 2, s * 0.42, -Math.PI / 2, -Math.PI / 2 + clamp(frac, 0, 1) * TAU); ctx.stroke();
-  if (remaining >= 0.2) outlinedText(ctx, remaining.toFixed(1), x + s / 2, y + s / 2 + 1, 15 * u, '#ffffff', 'rgba(0,0,0,0.9)', 800, FONT_SANS, 3);
+  if (remaining >= 0.2) outlinedText(ctx, whole ? Math.ceil(remaining).toString() : remaining.toFixed(1), mx, my + 1, (whole ? 16 : 14) * u, '#fff4e0', 'rgba(0,0,0,0.85)', 800, FONT_SERIF, 3);
 }
 
 // ---------------------------------------------------------------- HUD
@@ -196,81 +293,93 @@ export function drawHUD(ctx, g) {
   if (g.world.gate.active && g.state === 'play') drawGatePointer(ctx, g, u, g.realTime);
 }
 
-function drawPlayerPanel(ctx, g, p, idx, coop, u) {
+// pause: true while the pause screen shows it (stats and imbuements get their names, no attack slots)
+function drawPlayerPanel(ctx, g, p, idx, coop, u, pause = false) {
   const v = g.view, t = g.realTime;
   const right = coop && idx === 1;
   const W = v.W;
-  // mirror helper for player 2 (top-right)
+  // mirror helper for player 2 (top-right): X(x, w) is the left edge of something w wide at x from the edge
   const X = (x, w = 0) => (right ? W - x - w : x);
-  const px = 24 * u, py = 22 * u;
-  // portrait
-  ctx.save(); ctx.translate(X(px + 30 * u), py + 30 * u);
-  ctx.fillStyle = 'rgba(15,12,22,0.75)'; ctx.beginPath(); ctx.arc(0, 0, 32 * u, 0, TAU); ctx.fill();
-  ctx.strokeStyle = coop ? PLAYER_COLORS[idx] : '#c9a54a'; ctx.lineWidth = 2.5 * u; ctx.stroke();
-  // the player's pixel portrait (the same one the dialogue box uses), clipped to the circle
-  ctx.save(); ctx.beginPath(); ctx.arc(0, 0, 30 * u, 0, TAU); ctx.clip();
-  ctx.imageSmoothingEnabled = false;
-  if (right) ctx.scale(-1, 1); // player 2 faces inward too
-  ctx.drawImage(portrait(idx === 0 ? 'kage' : 'kaze'), -34 * u, -32 * u, 68 * u, 68 * u);
-  ctx.imageSmoothingEnabled = true;
-  if (p.dead) { ctx.fillStyle = 'rgba(40,6,10,0.65)'; ctx.fillRect(-32 * u, -32 * u, 64 * u, 64 * u); }
+  const px = 20 * u, py = 18 * u, PS = 112 * u;
+  const col = coop ? PLAYER_COLORS[idx] : '#c9a54a';
+  // ---- the portrait: a square, the ninja's head and shoulders in their own colours and gear
+  const qx = X(px, PS), qy = py;
+  ctx.save();
+  ctx.fillStyle = 'rgba(12,9,14,0.85)'; ctx.fillRect(qx, qy, PS, PS);
+  ctx.save(); ctx.beginPath(); ctx.rect(qx, qy, PS, PS); ctx.clip();
+  ctx.drawImage(hudPortrait(p, idx, right), qx, qy, PS, PS);
+  // the equipment set along the bottom: its name, then its bonus
+  const E = EQUIPMENT[p.equip] || EQUIPMENT.default;
+  const bandH = 18 * u, by = qy + PS - bandH;
+  const gr = ctx.createLinearGradient(0, by - 14 * u, 0, qy + PS); gr.addColorStop(0, 'rgba(8,5,8,0)'); gr.addColorStop(0.35, 'rgba(8,5,8,0.82)'); gr.addColorStop(1, 'rgba(8,5,8,0.92)');
+  ctx.fillStyle = gr; ctx.fillRect(qx, by - 14 * u, PS, bandH + 14 * u);
+  fitText(ctx, E.title, qx + PS / 2, by + 8 * u, 12 * u, PS - 10 * u, '#f4d690', 800, FONT_SERIF);
+  if (p.dead) { ctx.fillStyle = 'rgba(40,6,10,0.65)'; ctx.fillRect(qx, qy, PS, PS); outlinedText(ctx, '死', qx + PS / 2, qy + PS * 0.4, 40 * u, '#e05050', 'rgba(0,0,0,0.6)', 800, FONT_SERIF, 3 * u); }
   ctx.restore();
-  ctx.beginPath(); ctx.arc(0, 0, 32 * u, 0, TAU); ctx.stroke(); // ring back on top
-  if (p.dead) outlinedText(ctx, '死', 0, 2 * u, 30 * u, '#e05050', 'rgba(0,0,0,0.6)', 800, FONT_SERIF, 3 * u);
-  if (coop) text(ctx, `P${idx + 1}`, 0, 40 * u, 11 * u, PLAYER_COLORS[idx], 800);
+  ctx.strokeStyle = INK; ctx.lineWidth = 2; ctx.strokeRect(qx, qy, PS, PS);
+  ctx.strokeStyle = col; ctx.lineWidth = 1.4 * u; ctx.strokeRect(qx + 3 * u, qy + 3 * u, PS - 6 * u, PS - 6 * u);
+  if (coop) { ctx.fillStyle = col; ctx.fillRect(qx + (right ? 3 * u : PS - 27 * u), qy + 3 * u, 24 * u, 14 * u); text(ctx, `P${idx + 1}`, qx + (right ? 15 * u : PS - 15 * u), qy + 10.5 * u, 10 * u, '#fff', 800); }
   ctx.restore();
-  // bars
-  const bw = 300 * u, bh = 20 * u, bx = X(px + 72 * u, bw);
+  // ---- base stats, one under the other below the portrait
+  {
+    const rowH = 19 * u, iconS = 15 * u, sy = qy + PS + 8 * u, sw = (pause ? 190 : 74) * u, sx = X(px, sw);
+    ctx.fillStyle = 'rgba(12,9,14,0.55)'; ctx.fillRect(sx, sy - 3 * u, sw, STAT_ORDER.length * rowH + 4 * u);
+    STAT_ORDER.forEach((k, i) => {
+      const y = sy + i * rowH + rowH / 2 - 1 * u;
+      drawStatIcon(ctx, k, sx + 5 * u + iconS / 2, y, iconS);
+      if (pause) text(ctx, UPGRADES[k].name, sx + 10 * u + iconS, y + 0.5 * u, 11.5 * u, 'rgba(248,240,222,0.85)', 700, FONT_SANS, 'left');
+      text(ctx, statText(p, k), sx + sw - 6 * u, y + 0.5 * u, 11.5 * u, '#f4ecdc', 700, FONT_SANS, 'right');
+    });
+    // the weapon's imbuements, in their own section under the stats (a 2x / half tag in its corner when a
+    // sacrifice changed how strong they are)
+    const w = p.weapons[0], els = Object.keys(ELEMENTS).filter((k) => w.elements[k] > 0);
+    if (els.length) {
+      const iy = sy + STAT_ORDER.length * rowH + 8 * u, ih = els.length * rowH + 9 * u, pad = 5 * u; // (pad: room under the corner tag)
+      ctx.fillStyle = 'rgba(12,9,14,0.55)'; ctx.fillRect(sx, iy - 3 * u, sw, ih);
+      ctx.fillStyle = 'rgba(232,196,112,0.5)'; ctx.fillRect(sx, iy - 3 * u, sw, 1);
+      els.forEach((k, i) => {
+        const y = iy + pad + i * rowH + rowH / 2 - 1 * u;
+        elemBadge(ctx, k, sx + 5 * u + iconS / 2, y, iconS);
+        if (pause) text(ctx, ELEMENTS[k].name, sx + 10 * u + iconS, y + 0.5 * u, 11.5 * u, 'rgba(248,240,222,0.85)', 700, FONT_SANS, 'left');
+        text(ctx, elemText(w, k), sx + sw - 6 * u, y + 0.5 * u, 11.5 * u, ELEMENTS[k].color, 800, FONT_SANS, 'right');
+      });
+      const M = p.elemMul || 1;
+      if (Math.abs(M - 1) > 0.01) {
+        const str = M >= 1 ? `${+M.toFixed(2)}×` : M === 0.5 ? '½×' : `${+M.toFixed(2)}×`;
+        ctx.font = `800 ${10 * u}px ${FONT_SANS}`; const tw = ctx.measureText(str).width + 8 * u, th = 14 * u, tx = sx + sw - tw + 3 * u, ty = iy - 3 * u - th / 2 - 1 * u;
+        ctx.fillStyle = M > 1 ? '#c99a32' : '#7a3a3a'; ctx.fillRect(tx, ty, tw, th);
+        ctx.strokeStyle = 'rgba(15,10,14,0.9)'; ctx.lineWidth = 1.2; ctx.strokeRect(tx, ty, tw, th);
+        text(ctx, str, tx + tw / 2, ty + th / 2 + 0.5, 10 * u, '#fff8e8', 800);
+      }
+    }
+  }
+  // ---- health and ki: two ink strokes beside the portrait
+  const bx0 = px + PS + 12 * u, hw = 270 * u, hh = 18 * u, kw = 220 * u, kh = 11 * u, hy = py + 6 * u, ky = hy + hh + 8 * u;
   p.hpTrail = lerp(p.hpTrail ?? p.hp, p.hp, 0.04);
   const lowHp = p.hp < p.maxHp * 0.3 && !p.dead;
-  brushBar(ctx, bx, py + 4 * u, bw, bh, p.hp / p.maxHp, lowHp ? `rgb(${200 + 55 * Math.sin(t * 8)},40,40)` : '#c8302e', 'rgba(20,10,14,0.75)', p.hpTrail / p.maxHp);
-  text(ctx, p.dead ? (p.returnLevel ? `FALLEN — returns at level ${p.returnLevel}` : 'FALLEN') : `${Math.ceil(p.hp)} / ${p.maxHp}`, bx + 12 * u, py + 4 * u + bh / 2 + 1, 13 * u, '#fff', 800, FONT_SANS, 'left');
-  const ew = bw * 0.85, ex = right ? bx + bw - ew : bx;
-  brushBar(ctx, ex, py + 30 * u, ew, bh * 0.75, p.energy / p.maxEnergy, '#3fb6c8', 'rgba(10,16,24,0.75)');
-  text(ctx, `${Math.floor(p.energy)} / ${p.maxEnergy}`, ex + 12 * u, py + 30 * u + bh * 0.375 + 1, 11 * u, '#eaffff', 800, FONT_SANS, 'left');
-  // Battle Rush: bonus damage for the first seconds of the level
+  inkStroke(ctx, X(bx0, hw), hy, hw, hh, p.hp / p.maxHp, lowHp ? `rgb(${200 + 55 * Math.sin(t * 8)},40,40)` : '#c8302e', p.hpTrail / p.maxHp, right);
+  textEdge(ctx, p.dead ? (p.returnLevel ? `Fallen — returns at level ${p.returnLevel}` : 'Fallen') : `${Math.ceil(p.hp)} / ${p.maxHp}`, right ? W - bx0 - 10 * u : bx0 + 10 * u, hy + hh / 2 + 1, 12 * u, '#fff', right ? 'right' : 'left');
+  inkStroke(ctx, X(bx0, kw), ky, kw, kh, p.energy / p.maxEnergy, '#3fb6c8', null, right);
+  textEdge(ctx, `${Math.floor(p.energy)} / ${p.maxEnergy}`, right ? W - bx0 - 10 * u : bx0 + 10 * u, ky + kh / 2 + 1, 9.5 * u, '#eaffff', right ? 'right' : 'left');
+  let rowY = ky + kh + 12 * u;
+  // solo lives: small hearts under the ki stroke
+  if (!coop && p.lives > 0) {
+    for (let i = 0; i < p.lives; i++) lifeHeart(ctx, X(bx0 + 9 * u + i * 18 * u), rowY, 6.5 * u);
+    rowY += 18 * u;
+  }
+  // Battle Rush: bonus damage for the first seconds of the level (beside the health stroke)
   if (p.rushT > 0 && !p.dead) {
     const str = `+${Math.round((p.rushMul - 1) * 100)}% DMG`;
     ctx.font = `800 ${Math.round(12 * u)}px ${FONT_SANS}`;
-    const cw = ctx.measureText(str).width + 30 * u, ch = 22 * u, cx = right ? bx - 10 * u - cw : bx + bw + 10 * u, cy = py + 3 * u;
+    const cw = ctx.measureText(str).width + 30 * u, ch = 22 * u, cx = X(bx0 + hw + 12 * u, cw), cy = hy - 2 * u;
     ctx.fillStyle = `rgba(120,40,8,${0.8 + 0.15 * Math.sin(t * 6)})`; ctx.fillRect(cx, cy, cw, ch);
     ctx.strokeStyle = '#ff8a3c'; ctx.lineWidth = 1.5 * u; ctx.strokeRect(cx, cy, cw, ch);
     ctx.save(); ctx.translate(cx + 12 * u, cy + ch / 2); drawIcon(ctx, 'rush', 0.26 * u, '#ffb070', t); ctx.restore();
     text(ctx, str, cx + 24 * u, cy + ch / 2 + 1, 12 * u, '#ffe0c0', 800, FONT_SANS, 'left');
   }
-  // stat chips
-  const S = p.stats;
-  const chips = STAT_ORDER.map((k) => [k, statText(p, k)]);
-  const iconS = 15 * u;
-  const widths = chips.map(([, val]) => {
-    ctx.font = `700 ${Math.round(11 * u)}px ${FONT_SANS}`;
-    return ctx.measureText(val).width + iconS + 10 * u;
-  });
-  const total = widths.reduce((a, b) => a + b + 4 * u, 0);
-  let cx = right ? W - (px + 72 * u) - total : bx;
-  chips.forEach(([k, val], i) => {
-    const w = widths[i];
-    ctx.fillStyle = 'rgba(15,12,22,0.6)'; ctx.fillRect(cx, py + 52 * u, w, 18 * u);
-    drawStatIcon(ctx, k, cx + 1.5 * u + iconS / 2, py + 61 * u, iconS);
-    text(ctx, val, cx + w - 4 * u, py + 61 * u, 11 * u, '#f4ecdc', 700, FONT_SANS, 'right');
-    cx += w + 4 * u;
-  });
-  // sacrifices taken: crimson seals under the stat chips
-  if (p.sac && p.sac.length) {
-    ctx.font = `700 ${Math.round(11 * u)}px ${FONT_SERIF}`;
-    const items = p.sac.filter((k) => SACRIFICES[k]).map((k) => { const S = SACRIFICES[k]; return [S.title, ctx.measureText(`犠 ${S.title}`).width + 14 * u]; });
-    const tot = items.reduce((a, it) => a + it[1] + 4 * u, 0);
-    let sx = right ? W - (px + 72 * u) - tot : bx;
-    for (const [title, w] of items) {
-      ctx.fillStyle = 'rgba(90,10,18,0.78)'; ctx.fillRect(sx, py + 74 * u, w, 18 * u);
-      ctx.strokeStyle = 'rgba(220,120,90,0.6)'; ctx.lineWidth = 1; ctx.strokeRect(sx, py + 74 * u, w, 18 * u);
-      text(ctx, `犠 ${title}`, sx + w / 2, py + 83 * u, 11 * u, '#ffd8c8', 700, FONT_SERIF);
-      sx += w + 4 * u;
-    }
-  }
-  drawSlots(ctx, g, p, idx, coop, u);
+  if (pause) return;
+  drawSlots(ctx, g, p, idx, coop, u); // (attacks, dash and talents, laid out like the controller)
   if (p.dead && coop) drawFallen(ctx, g, p, idx, u);
-  else drawTalents(ctx, g, p, idx, coop, u);
 }
 
 // co-op: a fallen player's corner (bottom-left for P1, bottom-right for P2) says when they come back
@@ -295,111 +404,127 @@ function drawFallen(ctx, g, p, idx, u) {
   ctx.restore();
 }
 
-// talents: bottom-left for player 1, bottom-right for player 2 (X / Y / B, or 1 / 2 / 3)
-function drawTalents(ctx, g, p, idx, coop, u) {
-  if (!p.talents || !p.talents.length) return;
-  const v = g.view, s = 58 * u, gap = 10 * u;
-  const pad = p.ctl.mode === 'pad';
-  const keys = pad ? ['X', 'Y', 'B'] : ['1', '2', '3'];
-  const keyCol = pad ? ['#3a7ae0', '#e0b030', '#d04040'] : ['#e8c470', '#e8c470', '#e8c470'];
-  const right = coop && idx === 1;
-  const y = v.H - 84 * u - s - 34 * u;
-  p.talents.forEach((t, i) => {
-    const x = right ? v.W - 24 * u - (i + 1) * s - i * gap : 24 * u + i * (s + gap);
-    const ready = t.cd <= 0;
-    ctx.fillStyle = 'rgba(18,14,24,0.85)'; ctx.fillRect(x, y, s, s);
-    ctx.strokeStyle = ready ? '#ffd45e' : 'rgba(232,196,112,0.4)'; ctx.lineWidth = ready ? 3 : 2; ctx.strokeRect(x, y, s, s);
-    ctx.save(); ctx.translate(x + s / 2, y + s / 2); drawIcon(ctx, `talent_${t.key}`, s / 85, ready ? '#ffe9b0' : 'rgba(255,233,176,0.4)', g.realTime); ctx.restore();
-    if (!ready) {
-      const k = clamp(t.cd / (t.cdMax || 1), 0, 1);
-      ctx.save(); ctx.beginPath(); ctx.rect(x, y, s, s); ctx.clip();
-      ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.beginPath(); ctx.moveTo(x + s / 2, y + s / 2); ctx.arc(x + s / 2, y + s / 2, s * 0.75, -Math.PI / 2, -Math.PI / 2 + k * TAU); ctx.closePath(); ctx.fill();
-      ctx.restore();
-      outlinedText(ctx, Math.ceil(t.cd).toString(), x + s / 2, y + s / 2 + 1, 18 * u, '#fff', 'rgba(0,0,0,0.9)', 800, FONT_SANS, 3);
-    }
-    ctx.fillStyle = keyCol[i]; ctx.beginPath(); ctx.arc(x + 4 * u, y + 4 * u, 10 * u, 0, TAU); ctx.fill();
-    text(ctx, keys[i], x + 4 * u, y + 4.5 * u, 11 * u, '#fff', 800);
-    { const ri = t.rarity || 0, col = ['#c8bca8', '#4a8ae8', '#a85ae0', '#f0b030'][ri]; // one gem per rarity step
-      for (let k = 0; k <= ri; k++) { const gx = x + s - 6 * u - k * 7 * u, gy = y + s - 8 * u; ctx.fillStyle = col; ctx.strokeStyle = '#120c10'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(gx, gy - 3.5 * u); ctx.lineTo(gx + 3 * u, gy); ctx.lineTo(gx, gy + 3.5 * u); ctx.lineTo(gx - 3 * u, gy); ctx.closePath(); ctx.fill(); ctx.stroke(); } }
-  });
-  text(ctx, '才 Talents', right ? v.W - 24 * u : 24 * u, y - 10 * u, 11 * u, 'rgba(232,196,112,0.85)', 800, FONT_SERIF, right ? 'right' : 'left');
+
+// the controller's face buttons as coloured discs (X blue, Y yellow, B red, A green)
+export const FACE = { X: '#3a7ae0', Y: '#e0b030', B: '#d04040', A: '#5aa832' };
+export function drawFaceButton(ctx, name, cx, cy, r, dim = false) {
+  ctx.save(); ctx.globalAlpha *= dim ? 0.6 : 1;
+  ctx.fillStyle = FACE[name] || '#3a3440'; ctx.strokeStyle = 'rgba(20,14,20,0.9)'; ctx.lineWidth = Math.max(1, r * 0.14);
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, TAU); ctx.fill(); ctx.stroke();
+  ctx.font = `800 ${Math.round(r * 1.15)}px ${FONT_SANS}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#fff'; ctx.fillText(name, cx, cy + r * 0.06);
+  ctx.restore();
+}
+// which button does what (one weapon): basic, secondary, special
+export function attackKeys(pad) { return pad ? ['X', 'Y', 'B'] : ['LMB', 'RMB', 'Q']; }
+
+// The bottom HUD is laid out like the controller: the attacks as its face buttons (Y on top, X left, B right) with the
+// dash as A at the bottom. The talents sit on the same row as the attacks, LB / LT to the left and RB / RT to the
+// right (LT and RT outermost), and a talent slot only appears once a talent is on that button.
+// Every slot shares one look: black lacquer with a gold-leaf inner border and gold corner fittings (bright when
+// ready), an ink-wash sweep while it recovers, and its button as a vermilion hanko seal (keyboard) or the
+// controller's own button.
+function slotFrame(ctx, x, y, s, u, ready, off = false) {
+  ctx.fillStyle = off ? 'rgba(26,22,26,0.82)' : 'rgba(14,10,14,0.8)'; ctx.fillRect(x, y, s, s);
+  ctx.strokeStyle = off ? 'rgba(150,146,154,0.4)' : ready ? 'rgba(232,196,112,0.95)' : 'rgba(232,196,112,0.28)';
+  ctx.lineWidth = Math.max(1, 1.3 * u); ctx.strokeRect(x + 0.5, y + 0.5, s - 1, s - 1);
+}
+// a button label at (x, y): the controller's button, or a vermilion hanko with the key
+function slotKey(ctx, label, x, y, u, pad, dim = false) {
+  if (pad) {
+    if (label.length === 1) drawFaceButton(ctx, label, x, y, 9 * u, dim);
+    else { ctx.save(); ctx.globalAlpha *= dim ? 0.6 : 1; drawPadButton(ctx, label, x, y, 15 * u, '#1e1a24', '#e8c470'); ctx.restore(); }
+    return;
+  }
+  ctx.save(); ctx.translate(x, y); ctx.rotate(-0.06); ctx.globalAlpha *= dim ? 0.6 : 1;
+  ctx.font = `800 ${9.5 * u}px ${FONT_SANS}`;
+  const w = Math.max(15 * u, ctx.measureText(label).width + 8 * u), h = 15 * u;
+  ctx.fillStyle = dim ? '#6a5a58' : '#b52a22'; ctx.beginPath(); ctx.roundRect(-w / 2, -h / 2, w, h, 2.5 * u); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,236,220,0.55)'; ctx.lineWidth = 0.8 * u; ctx.beginPath(); ctx.roundRect(-w / 2 + 1.8 * u, -h / 2 + 1.8 * u, w - 3.6 * u, h - 3.6 * u, 1.5 * u); ctx.stroke();
+  ctx.restore();
+  text(ctx, label, x, y + 0.5 * u, 9.5 * u, '#fff2e4', 800);
 }
 
 function drawSlots(ctx, g, p, idx, coop, u) {
   const v = g.view;
   const pad = p.ctl.mode === 'pad';
-  const slotS = 54 * u, gap = 8 * u, groupGap = 38 * u;
-  const totalW = slotS * 4 + gap * 2 + groupGap + 70 * u;
-  const center = coop ? (idx === 0 ? v.W * 0.27 : v.W * 0.73) : v.W / 2;
-  let sx = center - totalW / 2;
-  const sy = v.H - slotS - 30 * u;
+  const slotS = 52 * u, DX = 57 * u, DY = 45 * u;
+  const cx = coop ? (idx === 0 ? v.W * 0.27 : v.W * 0.73) : v.W / 2, cy = v.H - 84 * u;
   ctx.globalAlpha = p.dead ? 0.4 : 1;
-  for (let i = 0; i < 2; i++) {
-    const w = p.weapons[i];
-    const labels = i === 0 ? (pad ? ['LB', 'LT'] : ['Q', 'E']) : (pad ? ['RB', 'RT'] : ['LMB', 'RMB']);
-    const groupX = sx;
-    for (let s = 0; s < 2; s++) {
-      const isSpecial = s === 1;
-      const def = isSpecial ? w.def.special : w.def.basic;
-      const own = isSpecial ? w.scd : w.cd, ownMax = isSpecial ? w.scdMax : w.cdMax;
-      // you can attack again when both this weapon's cooldown and its own attack lock are done
-      const lk = w.lockT || 0;
-      const remaining = Math.max(own, lk);
-      const frac = own >= lk ? own / (ownMax || 1) : lk / (w.lockMax || 1);
-      const cost = p.kiCost(def);
-      const noEnergy = cost > 0 && p.energy < cost;
-      const x = sx, y = sy;
-      ctx.fillStyle = noEnergy ? 'rgba(30,20,25,0.85)' : 'rgba(18,14,24,0.8)';
-      ctx.fillRect(x, y, slotS, slotS);
-      ctx.strokeStyle = noEnergy ? 'rgba(150,146,154,0.6)' : remaining <= 0.01 ? '#e8c470' : 'rgba(232,196,112,0.4)'; ctx.lineWidth = 2; ctx.strokeRect(x, y, slotS, slotS);
-      ctx.save(); ctx.translate(x + slotS / 2, y + slotS / 2);
-      ctx.globalAlpha *= noEnergy ? 0.45 : 1;
-      if (isSpecial) drawSpecialIcon(ctx, w.key, slotS / 44, noEnergy ? '#8a8690' : '#f2e6cc'); else drawBasicIcon(ctx, w.key, u);
-      ctx.restore();
-      if (noEnergy) {
-        // not enough ki: grayed out, with a ki bar filling up from the bottom toward the cost
-        ctx.fillStyle = 'rgba(70,68,74,0.55)'; ctx.fillRect(x, y, slotS, slotS);
-        const k = clamp(p.energy / (cost || 1), 0, 1);
-        ctx.fillStyle = 'rgba(79,200,220,0.35)'; ctx.fillRect(x + 2, y + slotS - 2 - (slotS - 4) * k, slotS - 4, (slotS - 4) * k);
-      } else drawCooldown(ctx, x, y, slotS, remaining, frac, u);
-      if (w.arts && w.arts[isSpecial ? 'special' : 'basic']) { // this attack has a weapon art: a gold diamond in the corner
-        const dx = x + slotS - 2 * u, dy = y + 2 * u, r = 5 * u;
-        ctx.fillStyle = '#ffd070'; ctx.strokeStyle = '#1a1420'; ctx.lineWidth = 1.2;
-        ctx.beginPath(); ctx.moveTo(dx, dy - r); ctx.lineTo(dx + r, dy); ctx.lineTo(dx, dy + r); ctx.lineTo(dx - r, dy); ctx.closePath(); ctx.fill(); ctx.stroke();
-      }
-      if (pad) { ctx.save(); ctx.globalAlpha *= noEnergy ? 0.6 : 1; drawPadButton(ctx, labels[s], x + 11 * u, y - 2 * u, 17 * u, '#1e1a24', noEnergy ? '#9a96a0' : '#e8c470'); ctx.restore(); }
-      else {
-        ctx.fillStyle = noEnergy ? 'rgba(150,146,154,0.9)' : 'rgba(232,196,112,0.95)'; ctx.fillRect(x - 3 * u, y - 9 * u, 30 * u, 15 * u);
-        text(ctx, labels[s], x - 3 * u + 15 * u, y - 1.5 * u, 10 * u, '#1a1420', 800);
-      }
-      if (cost > 0) { // ki cost badge
-        ctx.fillStyle = noEnergy ? '#5a5660' : '#2a8a9a'; ctx.fillRect(x + slotS - 24 * u, y + slotS - 14 * u, 24 * u, 14 * u);
-        text(ctx, `${cost}`, x + slotS - 12 * u, y + slotS - 7 * u, 10 * u, '#fff', 800);
-      }
-      sx += slotS + gap;
+  const w = p.weapons[0];
+  const labels = attackKeys(pad);
+  // basic = X (left), secondary = Y (top), special = B (right)
+  const spots = [[cx - DX, cy], [cx, cy - DY], [cx + DX, cy]];
+  [['basic', w.def.basic, w.cd, w.cdMax], ['secondary', w.def.secondary, w.ccd || 0, w.ccdMax], ['special', w.def.special, w.scd, w.scdMax]].forEach(([kind, def, own, ownMax], s) => {
+    if (!def) return;
+    const x = spots[s][0] - slotS / 2, y = spots[s][1] - slotS / 2;
+    // you can attack again when both this attack's cooldown and the weapon's attack lock are done
+    const lk = w.lockT || 0;
+    const remaining = Math.max(own, lk);
+    const frac = own >= lk ? own / (ownMax || 1) : lk / (w.lockMax || 1);
+    const cost = p.kiCost(def, kind === 'basic' ? null : w);
+    const noEnergy = cost > 0 && p.energy < cost;
+    slotFrame(ctx, x, y, slotS, u, remaining <= 0.01, noEnergy);
+    ctx.save(); ctx.translate(x + slotS / 2, y + slotS / 2);
+    ctx.globalAlpha *= noEnergy ? 0.45 : 1;
+    if (kind === 'special') drawSpecialIcon(ctx, w.key, slotS / 44, noEnergy ? '#8a8690' : '#f2e6cc');
+    else if (kind === 'secondary') drawSecondaryIcon(ctx, w.key, slotS / 44, noEnergy ? '#8a8690' : '#cfe4f2');
+    else drawBasicIcon(ctx, w.key, u);
+    ctx.restore();
+    if (noEnergy) {
+      // not enough ki: ki fills up from the bottom toward the cost
+      const k = clamp(p.energy / (cost || 1), 0, 1), i = 4 * u;
+      ctx.fillStyle = 'rgba(79,200,220,0.28)'; ctx.fillRect(x + i, y + slotS - i - (slotS - 2 * i) * k, slotS - 2 * i, (slotS - 2 * i) * k);
+    } else drawCooldown(ctx, x, y, slotS, remaining, frac, u);
+    if (w.arts && w.arts[kind]) { // this attack has a technique: a gold diamond in the corner
+      const dx = x + slotS - 2 * u, dy = y + 2 * u, r = 5 * u;
+      ctx.fillStyle = '#ffd070'; ctx.strokeStyle = '#1a1420'; ctx.lineWidth = 1.2;
+      ctx.beginPath(); ctx.moveTo(dx, dy - r); ctx.lineTo(dx + r, dy); ctx.lineTo(dx, dy + r); ctx.lineTo(dx - r, dy); ctx.closePath(); ctx.fill(); ctx.stroke();
     }
-    // weapon name + elements
-    const mid = groupX + slotS + gap / 2;
-    text(ctx, w.def.name + (w.arts && w.arts.unique ? ' ◆' : ''), mid, sy + slotS + 11 * u, 11 * u, w.arts && w.arts.unique ? '#ffd890' : 'rgba(246,238,220,0.85)', 700);
-    const els = Object.keys(ELEMENTS).filter((k) => w.elements[k] > 0);
-    if (els.length) {
-      const strs = els.map((k) => `${ELEMENTS[k].jp} ${k === 'syphon' ? +(w.elements[k] * 100).toFixed(1) + '%' : (k === 'ice' || k === 'wind') ? Math.round(w.elements[k] * 100) + '%' : w.elements[k]}`);
-      let ox = mid - (strs.length - 1) * 26 * u;
-      els.forEach((k, j) => { ctx.fillStyle = 'rgba(15,12,22,0.75)'; ctx.fillRect(ox - 24 * u, sy - 30 * u, 48 * u, 16 * u); text(ctx, strs[j], ox, sy - 22 * u, 11 * u, ELEMENTS[k].color, 800); ox += 52 * u; });
+    denyFlash(ctx, p, kind, x, y, slotS, slotS, u);
+    slotKey(ctx, labels[s], x + 3 * u, y + 3 * u, u, pad, noEnergy);
+    if (cost > 0) { // energy cost: a small dark plate in the corner, red when you can't pay it yet
+      const bw = 22 * u, bh = 13 * u, bx = x + slotS - bw - 2 * u, by = y + slotS - bh - 2 * u;
+      ctx.fillStyle = noEnergy ? 'rgba(120,20,24,0.95)' : 'rgba(14,40,46,0.95)'; ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 2 * u); ctx.fill();
+      ctx.strokeStyle = noEnergy ? '#e05a50' : '#4fc8dc'; ctx.lineWidth = 1; ctx.stroke();
+      text(ctx, `${cost}`, bx + bw / 2, by + bh / 2 + 0.5 * u, 9.5 * u, noEnergy ? '#ffd0c8' : '#d8f6ff', 800);
     }
-    sx += groupGap - gap;
+  });
+  // dash: a horizontal bar under the attacks (A / Space): 疾 on the left, it fills left to right as it recharges,
+  // one pip per charge on the right
+  {
+    const d = p.dash, ready = (p.dashCharges ?? 1) > 0, bw = 2 * DX - slotS * 0.15, bh = 20 * u, bx = cx - bw / 2, by = cy + DY - bh / 2 - 6 * u;
+    ctx.fillStyle = 'rgba(14,10,14,0.8)'; ctx.fillRect(bx, by, bw, bh);
+    const k = ready ? 1 : 1 - clamp(d.cd / (d.cdMax || 1), 0, 1);
+    ctx.fillStyle = ready ? 'rgba(232,196,112,0.22)' : 'rgba(232,196,112,0.12)'; ctx.fillRect(bx, by, bw * k, bh);
+    ctx.strokeStyle = ready ? 'rgba(232,196,112,0.95)' : 'rgba(232,196,112,0.28)'; ctx.lineWidth = Math.max(1, 1.3 * u); ctx.strokeRect(bx + 0.5, by + 0.5, bw - 1, bh - 1);
+    text(ctx, !ready && d.cd >= 0.2 ? d.cd.toFixed(1) : 'Dash', cx, by + bh / 2 + 1, 12.5 * u, ready ? '#f2e6cc' : '#fff4e0', 800, FONT_SERIF);
+    if (p.dashMax > 1) for (let q = 0; q < p.dashMax; q++) { const on = q < (p.dashCharges ?? 1); ctx.fillStyle = on ? '#e8c470' : 'rgba(90,80,90,0.9)'; ctx.fillRect(bx + bw - 10 * u - q * 8 * u, by + bh / 2 - 3 * u, 5 * u, 6 * u); }
+    denyFlash(ctx, p, 'dash', bx, by, bw, bh, u);
+    slotKey(ctx, pad ? 'A' : 'Space', cx, by - 2 * u, u, pad);
   }
-  // dash
-  const dx = sx + 22 * u, dy = sy + slotS / 2;
-  const d = p.dash;
-  ctx.fillStyle = 'rgba(18,14,24,0.8)'; ctx.beginPath(); ctx.arc(dx, dy, 24 * u, 0, TAU); ctx.fill();
-  ctx.strokeStyle = d.cd <= 0 ? '#e8c470' : 'rgba(232,196,112,0.4)'; ctx.lineWidth = 2; ctx.stroke();
-  if (d.cd > 0) {
-    ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.beginPath(); ctx.moveTo(dx, dy); ctx.arc(dx, dy, 24 * u, -Math.PI / 2, -Math.PI / 2 + (d.cd / (d.cdMax || 1)) * TAU); ctx.closePath(); ctx.fill();
+  // the weapon's name above the diamond (its imbuements are in the left column)
+  {
+    const top = cy - DY - slotS / 2;
+    text(ctx, w.def.name, cx, top - 9 * u, 11 * u, 'rgba(246,238,220,0.85)', 700);
   }
-  text(ctx, '疾', dx, dy + 1, 18 * u, d.cd > 0 ? 'rgba(242,230,204,0.4)' : '#f2e6cc', 800, FONT_SERIF);
-  if (d.cd >= 0.2) outlinedText(ctx, d.cd.toFixed(1), dx, dy + 1, 15 * u, '#fff', 'rgba(0,0,0,0.9)', 800, FONT_SANS, 3);
-  text(ctx, pad ? 'A' : 'Space', dx, dy + 34 * u, 10 * u, 'rgba(232,196,112,0.95)', 800);
+  // talents, on the attacks' row: LB then LT going out to the left, RB then RT going out to the right; only filled ones
+  if (!(p.dead && coop)) {
+    const ts = 46 * u, gap = 12 * u, inner = DX + slotS / 2 + 18 * u + ts / 2;
+    const xs = [cx - inner, cx - inner - ts - gap, cx + inner, cx + inner + ts + gap];
+    const keys = pad ? ['LB', 'LT', 'RB', 'RT'] : ['1', '2', '3', '4'];
+    for (let i = 0; i < 4; i++) {
+      const t = p.talents && p.talents[i];
+      if (!t) continue;
+      const x = xs[i] - ts / 2, y = cy - ts / 2, ready = t.cd <= 0;
+      slotFrame(ctx, x, y, ts, u, ready);
+      ctx.save(); ctx.translate(x + ts / 2, y + ts / 2); drawIcon(ctx, `talent_${t.key}`, ts / 85, ready ? '#ffe9b0' : 'rgba(255,233,176,0.4)', g.realTime); ctx.restore();
+      if (!ready) drawCooldown(ctx, x, y, ts, t.cd, clamp(t.cd / (t.cdMax || 1), 0, 1), u, true);
+      const ri = t.rarity || 0, col = ['#c8bca8', '#4a8ae8', '#a85ae0', '#f0b030'][ri]; // one gem per rarity step
+      for (let k = 0; k <= ri; k++) { const gx = x + ts - 7 * u - k * 7 * u, gy = y + ts - 7 * u; ctx.fillStyle = col; ctx.strokeStyle = '#120c10'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(gx, gy - 3.5 * u); ctx.lineTo(gx + 3 * u, gy); ctx.lineTo(gx, gy + 3.5 * u); ctx.lineTo(gx - 3 * u, gy); ctx.closePath(); ctx.fill(); ctx.stroke(); }
+      denyFlash(ctx, p, 't' + i, x, y, ts, ts, u);
+      slotKey(ctx, keys[i], x + 3 * u, y + 3 * u, u, pad, !ready);
+    }
+  }
   ctx.globalAlpha = 1;
 }
 
@@ -524,7 +649,7 @@ export class Overlay {
   runCards() {
     const g = this.g, list = [];
     for (const p of g.players) {
-      const picked = (p.picked || []).slice();
+      const picked = (p.picked || []).filter((c) => !c.traded); // (cards traded in are gone)
       for (const k of p.sac || []) if (!picked.some((c) => c.type === 'sacrifice' && c.key === k)) picked.push({ type: 'sacrifice', key: k, rarity: 0 }); // (the online joiner's sacrifices)
       for (const c of picked) list.push({ card: c, player: p, label: g.players.length > 1 ? `P${p.index + 1}` : '' });
     }
@@ -536,18 +661,19 @@ export class Overlay {
     ctx.fillStyle = 'rgba(8,6,14,0.74)'; ctx.fillRect(0, 0, v.W, v.H);
     outlinedText(ctx, '一時停止  Paused', v.W / 2, v.H * 0.08, 36 * u, '#f8f0de');
     ['Resume', 'Quit to main menu'].forEach((s2, i) => {
-      const y = v.H * 0.17 + i * 42 * u;
+      const y = v.H * 0.205 + i * 42 * u;
       if (i === this.sel % 2) { ctx.fillStyle = 'rgba(200,48,46,0.85)'; ctx.fillRect(v.W / 2 - 140 * u, y - 19 * u, 280 * u, 38 * u); }
       text(ctx, s2, v.W / 2, y, 19 * u, '#f8f0de', 800);
     });
     // ---- this run's cards
     const list = this.runCards(), n = list.length, sel = clamp(this.cardSel || 0, 0, Math.max(0, n - 1));
     this.cardScroll = lerp(this.cardScroll ?? sel, sel, 0.18);
-    const ch = Math.min(v.H * 0.42, 300 * u), cw = ch * (230 / 340), gap = 14 * u, cy = v.H * 0.62;
+    const ch = Math.min(v.H * 0.42, 300 * u), cw = ch * (230 / 340), gap = 14 * u, cy = v.H * 0.585;
     text(ctx, '札  Cards this run', v.W / 2, cy - ch / 2 - 26 * u, 15 * u, '#e8c470', 800, FONT_SERIF);
     if (!n) text(ctx, 'No cards chosen yet', v.W / 2, cy, 18 * u, 'rgba(248,240,222,0.7)', 800, FONT_SERIF);
     for (let i = 0; i < n; i++) {
-      const x = v.W / 2 + (i - this.cardScroll) * (cw + gap);
+      const fits = n * (cw + gap) <= v.W * 0.9; // all fit: the whole row centred; else the chosen card in the middle
+      const x = v.W / 2 + (i - (fits ? (n - 1) / 2 : this.cardScroll)) * (cw + gap);
       if (x < -cw || x > v.W + cw) continue;
       const on = i === sel, { card, player, label } = list[i];
       ctx.save(); ctx.translate(x, cy - (on ? 8 * u : 0)); const sc = on ? 1.04 : 0.92; ctx.scale(sc, sc);
@@ -557,34 +683,20 @@ export class Overlay {
       if (label) text(ctx, label, x, cy + ch * 0.5 + 12 * u, 11 * u, PLAYER_COLORS[player.index], 800);
     }
     if (n > 1) text(ctx, `${sel + 1} / ${n}   ·   ← → to browse`, v.W / 2, cy + ch * 0.5 + 28 * u, 12 * u, 'rgba(248,240,222,0.6)', 700);
-    // ---- core stats, top left (one panel per player)
+    // ---- the top-left HUD stays as it is (co-op: both corners), its stats and imbuements named
+    g.players.forEach((p, i) => drawPlayerPanel(ctx, g, p, i, g.players.length > 1, u, true));
+    // ---- each player's equipment set and its bonus: bottom-left (co-op: player 2 bottom-right)
     g.players.forEach((p, i) => {
-      const pw = 236 * u, rowH = 19 * u, ph = 30 * u + STAT_ORDER.length * rowH, px = 16 * u, py = 16 * u + i * (ph + 10 * u);
+      const E = EQUIPMENT[p.equip] || EQUIPMENT.default, lines = E.lines || [];
+      ctx.font = `800 ${15 * u}px ${FONT_SERIF}`; let tw = ctx.measureText(E.name).width;
+      ctx.font = `700 ${12 * u}px ${FONT_SANS}`; for (const ln of lines) tw = Math.max(tw, ctx.measureText(ln).width);
+      const pw = tw + 32 * u, ph = 36 * u + lines.length * 17 * u, px = i === 1 ? v.W - pw - 18 * u : 18 * u, py = v.H - ph - 18 * u;
+      const col = g.players.length > 1 ? PLAYER_COLORS[i] : '#e8c470';
       ctx.fillStyle = 'rgba(16,10,14,0.88)'; ctx.fillRect(px, py, pw, ph);
       ctx.strokeStyle = 'rgba(232,196,112,0.55)'; ctx.lineWidth = 1.2; ctx.strokeRect(px, py, pw, ph);
-      text(ctx, g.players.length > 1 ? `Player ${i + 1} · Core stats` : 'Core stats', px + 12 * u, py + 15 * u, 13 * u, g.players.length > 1 ? PLAYER_COLORS[i] : '#e8c470', 800, FONT_SERIF, 'left');
-      STAT_ORDER.forEach((k, j) => {
-        const y = py + 34 * u + j * rowH;
-        drawStatIcon(ctx, k, px + 20 * u, y, 15 * u);
-        text(ctx, UPGRADES[k].name, px + 34 * u, y, 12.5 * u, 'rgba(248,240,222,0.85)', 700, FONT_SANS, 'left');
-        text(ctx, statText(p, k), px + pw - 12 * u, y, 12.5 * u, STAT_STYLE[k].color, 800, FONT_SANS, 'right');
-      });
-    });
-    // ---- weapons, top right
-    g.players.forEach((p, i) => {
-      const pw = 290 * u, rowH = 46 * u, ph = 28 * u + p.weapons.length * rowH, px = v.W - pw - 16 * u, py = 16 * u + i * (ph + 10 * u);
-      ctx.fillStyle = 'rgba(16,10,14,0.88)'; ctx.fillRect(px, py, pw, ph);
-      ctx.strokeStyle = 'rgba(232,196,112,0.55)'; ctx.lineWidth = 1.2; ctx.strokeRect(px, py, pw, ph);
-      text(ctx, g.players.length > 1 ? `Player ${i + 1} · Weapons` : 'Weapons', px + 12 * u, py + 15 * u, 13 * u, g.players.length > 1 ? PLAYER_COLORS[i] : '#e8c470', 800, FONT_SERIF, 'left');
-      p.weapons.forEach((w, j) => {
-        const y = py + 28 * u + j * rowH, ic = 34 * u;
-        ctx.fillStyle = 'rgba(40,30,36,0.9)'; ctx.fillRect(px + 10 * u, y + 4 * u, ic, ic);
-        ctx.save(); ctx.translate(px + 10 * u + ic / 2, y + 4 * u + ic / 2); ctx.beginPath(); ctx.rect(-ic / 2, -ic / 2, ic, ic); ctx.clip(); drawBasicIcon(ctx, w.key, u * 0.75); ctx.restore();
-        const els = Object.keys(ELEMENTS).filter((k) => w.elements[k] > 0).map((k) => ELEMENTS[k].name).join(', ');
-        const arts = Object.values(w.arts || {}).map((k) => ARTS[w.key][k].name).join(', ');
-        text(ctx, `${w.def.name}  (${j === 0 ? 'L' : 'R'})`, px + 52 * u, y + 13 * u, 13.5 * u, '#f8f0de', 800, FONT_SERIF, 'left');
-        text(ctx, [els, arts].filter(Boolean).join(' · ') || 'no imbuement or technique yet', px + 52 * u, y + 30 * u, 10.5 * u, els || arts ? '#e8c470' : 'rgba(248,240,222,0.5)', 700, FONT_SANS, 'left');
-      });
+      ctx.fillStyle = col; ctx.fillRect(px, py, 3 * u, ph);
+      text(ctx, E.name, px + 16 * u, py + 18 * u, 15 * u, col, 800, FONT_SERIF, 'left');
+      lines.forEach((ln, k) => text(ctx, ln, px + 16 * u, py + 38 * u + k * 17 * u, 12 * u, p.equip === 'default' || !p.equip ? '#e8dcc0' : '#9fe0a0', 700, FONT_SANS, 'left'));
     });
   }
 
@@ -647,4 +759,87 @@ export function drawDebug(ctx, g) {
   const h = lines.length * 17 * u + 14 * u;
   ctx.fillStyle = 'rgba(0,0,0,0.65)'; ctx.fillRect(10 * u, v.H - h - 120 * u, 620 * u, h);
   lines.forEach((l, i) => text(ctx, l, 18 * u, v.H - h - 120 * u + 14 * u + i * 17 * u, 12 * u, '#bfffbf', 600, 'monospace', 'left'));
+}
+
+// one life on the HUD: a small red heart, ink-edged
+function lifeHeart(ctx, x, y, r) {
+  ctx.save(); ctx.translate(x, y);
+  ctx.beginPath(); ctx.moveTo(0, r * 1.0);
+  ctx.bezierCurveTo(-r * 1.5, -r * 0.1, -r * 0.9, -r * 1.25, 0, -r * 0.45);
+  ctx.bezierCurveTo(r * 0.9, -r * 1.25, r * 1.5, -r * 0.1, 0, r * 1.0);
+  ctx.closePath();
+  ctx.fillStyle = '#c8202c'; ctx.fill(); ctx.lineWidth = Math.max(1.2, r * 0.28); ctx.strokeStyle = 'rgba(25,8,12,0.9)'; ctx.lineJoin = 'round'; ctx.stroke();
+  ctx.fillStyle = 'rgba(255,200,200,0.6)'; ctx.beginPath(); ctx.ellipse(-r * 0.45, -r * 0.35, r * 0.22, r * 0.14, -0.6, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+
+// text that shrinks to fit a width
+function fitText(ctx, str, x, y, size, maxW, color, weight, font) {
+  let fs = size; ctx.font = `${weight} ${fs}px ${font}`;
+  while (ctx.measureText(str).width > maxW && fs > size * 0.6) { fs -= 0.5; ctx.font = `${weight} ${fs}px ${font}`; }
+  text(ctx, str, x, y, fs, color, weight, font);
+}
+// small text with a dark edge, so it reads on any stroke
+function textEdge(ctx, str, x, y, size, color, align) {
+  ctx.font = `800 ${Math.round(size)}px ${FONT_SANS}`; ctx.textAlign = align; ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round'; ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(10,6,10,0.85)'; ctx.strokeText(str, x, y);
+  ctx.fillStyle = color; ctx.fillText(str, x, y);
+}
+// a tapered ink stroke (thick where it starts, a dry-brush tip): the health and ki bars
+function inkStroke(ctx, x, y, w, h, k, fill, trail, flip) {
+  const path = (len) => {
+    ctx.beginPath();
+    ctx.moveTo(0, h * 0.08);
+    ctx.bezierCurveTo(len * 0.4, -h * 0.06, len * 0.8, h * 0.06, len, h * 0.2);
+    ctx.quadraticCurveTo(len + h * 0.35, h * 0.5, len - h * 0.15, h * 0.78);
+    ctx.bezierCurveTo(len * 0.8, h * 0.86, len * 0.4, h * 1.02, 0, h * 0.94);
+    ctx.quadraticCurveTo(-h * 0.25, h * 0.5, 0, h * 0.08);
+    ctx.closePath();
+  };
+  ctx.save(); ctx.translate(flip ? x + w : x, y); if (flip) ctx.scale(-1, 1);
+  path(w); ctx.fillStyle = 'rgba(14,8,12,0.72)'; ctx.fill();
+  if (trail !== null && trail > k) { path(Math.max(h * 0.4, w * trail)); ctx.fillStyle = 'rgba(255,240,220,0.7)'; ctx.fill(); }
+  if (k > 0.005) { path(Math.max(h * 0.4, w * k)); ctx.fillStyle = fill; ctx.fill(); ctx.fillStyle = 'rgba(255,255,255,0.13)'; ctx.fillRect(0, h * 0.18, w * k - h * 0.2, h * 0.16); }
+  path(w); ctx.strokeStyle = 'rgba(10,6,10,0.9)'; ctx.lineWidth = 1.6; ctx.lineJoin = 'round'; ctx.stroke();
+  ctx.restore();
+}
+// the HUD portrait: the player's own ninja (their colours and equipment gear), head and shoulders, drawn once
+const PORTRAITS = {};
+function hudPortrait(p, idx, flip) {
+  const key = idx + '|' + (p.equip || 'default') + '|' + (flip ? 1 : 0) + '|' + JSON.stringify(p.pal || {});
+  if (PORTRAITS[key]) return PORTRAITS[key];
+  const N = 224, c = document.createElement('canvas'); c.width = c.height = N;
+  const q = c.getContext('2d');
+  const bg = q.createLinearGradient(0, 0, 0, N);
+  bg.addColorStop(0, idx === 0 ? '#2c3658' : '#3c2a4c'); bg.addColorStop(1, '#100c16');
+  q.fillStyle = bg; q.fillRect(0, 0, N, N);
+  q.fillStyle = 'rgba(232,196,112,0.12)'; q.beginPath(); q.arc(N * 0.5, N * 0.33, N * 0.3, 0, Math.PI * 2); q.fill(); // a pale moon behind the head
+  const s = N / 32, foot = N * 0.33 + 35 * s; // (the head big, in the upper third: the equipment band covers the chest)
+  if (flip) { q.translate(N, 0); q.scale(-1, 1); }
+  drawHumanoid(q, { x: N * 0.5, y: foot, z: 0, facing: 0.3, time: 0.6, walk: 0, move: 0, pal: p.pal, head: 'hood', scarf: true, sashTail: false,
+    gear: p.equip && p.equip !== 'default' ? p.equip : null, weapon: null, weapon2: null, backWeapon: null, pose: null, flash: 0, rot: 0, sqx: 1, sqy: 1, s, alpha: 1 });
+  return (PORTRAITS[key] = c);
+}
+// an ability you pressed that isn't ready (cooldown, ki, no dash charge): its slot flashes red for a moment
+function denyFlash(ctx, p, key, x, y, w, h, u) {
+  const at = p.denyAt && p.denyAt[key];
+  if (at === undefined) return;
+  const k = (performance.now() / 1000 - at) / 0.45;
+  if (k < 0 || k >= 1) return;
+  const a = (1 - k) * (0.55 + 0.45 * Math.cos(k * Math.PI * 4));
+  ctx.save();
+  ctx.fillStyle = `rgba(220,30,30,${(0.38 * a).toFixed(3)})`; ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = `rgba(255,60,50,${a.toFixed(3)})`; ctx.lineWidth = 2.5 * u; ctx.strokeRect(x - 1 * u, y - 1 * u, w + 2 * u, h + 2 * u);
+  ctx.restore();
+}
+
+// an imbuement's value as the HUD shows it
+function elemText(w, k) { const v = w.elements[k]; return k === 'syphon' ? +(v * 100).toFixed(1) + '%' : (k === 'ice' || k === 'arcane' || k === 'burn') ? Math.round(v * 100) + '%' : `${v}`; }
+
+// an imbuement as a round badge (the stat icons' shape): dark disc, a ring and the mark in its colour
+function elemBadge(ctx, k, x, y, size) {
+  const r = size / 2, col = ELEMENTS[k].color;
+  ctx.fillStyle = 'rgba(16,12,20,0.92)'; ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill();
+  ctx.strokeStyle = col; ctx.lineWidth = Math.max(1, size * 0.08); ctx.beginPath(); ctx.arc(x, y, r - ctx.lineWidth / 2, 0, TAU); ctx.stroke();
+  drawElementMark(ctx, k, x, y + (k === 'lightning' || k === 'burn' ? 0 : 0.3), size / 19, col);
 }

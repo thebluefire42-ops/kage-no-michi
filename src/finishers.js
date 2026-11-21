@@ -89,6 +89,14 @@ export const FINISHERS = {
       { d: 0.2, pose: 'jump', z: [0.9, 0], fx: ['blood', 'sparks', 'kanji'] },
     ] },
   ],
+  // the spirit orb: the orb is raised and the restless souls burst up out of the fallen, streaming into the sky
+  orb: [
+    { name: 'Restless Ascent', jp: '昇魂', steps: [
+      { d: 0.16, pose: 'raise', fx: ['soulGather'], fxAt: 0 },
+      { d: 0.36, pose: 'raise', poseT: 1, fx: ['souls'], fxEvery: 0.065 },
+      { d: 0.18, pose: 'raise', poseT: 1, fx: ['soulFlash'], fxAt: 0 },
+    ] },
+  ],
   staff: [
     { name: 'Sanctify', jp: '浄化', steps: [
       { d: 0.22, pose: 'cast', fx: ['pillar'], fxAt: 0.3 },
@@ -142,6 +150,7 @@ export const FINISHERS = {
     ] },
   ],
 };
+
 
 // tuning
 // speed: every step plays at this share of its listed length; slow: game speed while it plays
@@ -285,6 +294,14 @@ function fx(p, name, s) {
     case 'bellRing': g.fx.ring(p.x, p.y, 1.1 + F.st * 6, 'rgba(255,226,150,0.7)', 0.35, 4); S('rin', 0.6 + F.st); break;
     case 'launch': g.fx.ring(T.x, T.y, 1.3, WHITE, 0.25, 4); g.particles.burst('spark', T.x, T.y, 1.2, 12, 5, 0.3, 1.8, '#fff2c0'); g.shake(3); S('heavyHit'); break;
     case 'lion': g.fx.ring(p.x, p.y, 1.8, GOLD, 0.35, 5); S('release'); break;
+    // spirit orb: souls gather in the body, then several at a time shoot up into the air (drawn in spirits.js)
+    case 'soulGather': g.particles.burst('glow', T.x, T.y, 0.7, 16, -1.5, 0.5, 2.4, '#9fd8ff'); g.fx.ring(T.x, T.y, 1.2, 'rgba(160,215,255,0.8)', 0.3, 3); S('haunt'); break;
+    case 'souls':
+      { const a = rand(0, TAU), sp = rand(1.2, 2.6); (g.soulRises || (g.soulRises = [])).push({ x: T.x + Math.cos(a) * rand(0.2, 0.7), y: T.y + Math.sin(a) * rand(0.2, 0.7), vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, z: rand(0.3, 0.8), vz: rand(13, 18), t: 0, dur: rand(1.1, 1.5), seed: rand(0, 9), s: rand(0.85, 1.25) }); } // one at a time, fanning out, climbing high
+      g.particles.burst('glow', T.x, T.y, 0.6, 3, 1.5, 0.4, 2, '#cfeaff');
+      if (Math.random() < 0.4) S('wisp');
+      break;
+    case 'soulFlash': g.fx.ring(T.x, T.y, 2.2, 'rgba(170,220,255,0.9)', 0.45, 5); g.particles.burst('glow', T.x, T.y, 1.2, 24, 3.5, 0.8, 2.6, '#9fd8ff'); S('summon'); break;
     case 'kanji': break; // (no name text)
   }
 }

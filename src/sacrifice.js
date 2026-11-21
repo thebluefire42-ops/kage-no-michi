@@ -3,64 +3,133 @@ import { TAU, clamp, lerp, rand, ease, isoX, isoY, worldDirToScreenAngle } from 
 import { drawHumanoid, drawShadow } from './rig.js';
 import { sfx } from './audio.js';
 import { drawStatIcon } from './staticons.js';
+import { drawRichText } from './cards.js';
 
 export const MONK_LEVELS = [5, 15, 25];
 
-// apply(p) runs on the authoritative game (host / local). Pacts only take effect if both players choose them.
+// Each sacrifice has a cost (pay) and a gain (get), kept apart so the Satanist's Set can skip the cost of
+// its first one. Weapon sacrifices name their weapon and are only offered to it.
+// pay(p) / get(p) run on the authoritative game (host / local). Pacts only take effect if both players choose them.
+const weaponIs = (k) => (p) => !!(p.weapons[0] && p.weapons[0].key === k);
 export const SACRIFICES = {
   bareBlade: {
-    title: 'Oath of the Bare Blade', jp: '素刃', cost: 'Lose all talents, forever', gain: '+60% damage', gs: ['baseDamage'],
-    apply(p) { p.stats.baseDamage += 0.6; p.talents = []; },
-  },
-  rooted: {
-    title: 'Rooted Mountain', jp: '不動', cost: '−20% move speed', gain: '+40% max health & regen', cs: ['moveSpeed'], gs: ['healthRegen'],
-    apply(p) { p.stats.moveSpeed *= 0.8; const k = p.hp / p.maxHp; p.maxHpMul *= 1.4; p.hp = k * p.maxHp; p.stats.healthRegen *= 1.4; },
+    title: 'Oath of the Bare Blade', jp: '素刃', cost: 'Lose all your talents', gain: '+8% {damage} per talent card', gs: ['baseDamage'],
+    needs: (p) => p.talents.length >= 1, // (only offered with at least one talent to give up)
+    cards: (p) => Math.max(p.talents.length, (p.picked || []).filter((c) => c.type === 'talent' && !c.traded).length), // talent cards picked (new ones and upgrades)
+    gainFor(p) { return `+${8 * this.cards(p)}% {damage} (8% per talent card)`; },
+    pay(p) { p.talents = []; }, get(p) { p.stats.baseDamage += 0.08 * this.cards(p); },
   },
   smallCuts: {
-    title: 'Thousand Small Cuts', jp: '千傷', cost: '−30% damage', gain: '−45% attack cooldowns', cs: ['baseDamage'],
-    apply(p) { p.stats.baseDamage *= 0.7; p.stats.cooldownMul *= 0.55; },
+    title: 'Thousand Small Cuts', jp: '千傷', cost: '−20% {damage}', gain: '−40% {atkcd}', cs: ['baseDamage'], gs: ['cooldownMul'],
+    pay(p) { p.stats.baseDamage *= 0.8; }, get(p) { p.stats.cooldownMul *= 0.6; },
+  },
+  // 20 max health for +20% crit chance (no use when crits are off or always on); past 100% it becomes crit damage
+  glassEdge: {
+    title: 'Glass Edge', jp: '玻刃', cost: '−20 max {health}', gain: '+20% {crit}', gs: ['critChance'],
+    excl: ['covenant', 'executioner'], needs: (p) => !p.noCrit && !p.alwaysCrit,
+    gainFor(p) { const c = p.stats.critChance + 0.2; return c <= 1 + 1e-9 ? this.gain : c - 1 >= 0.2 - 1e-9 ? '+20% {critdmg} (crit chance is full)' : `+${Math.round((0.2 - (c - 1)) * 100)}% {crit} +${Math.round((c - 1) * 100)}% {critdmg}`; },
+    pay(p) { p.maxHpAdd = (p.maxHpAdd || 0) - 20; p.hp = Math.min(p.hp, p.maxHp); },
+    get(p) { const c = p.stats.critChance + 0.2; p.stats.critChance = Math.min(1, c); p.stats.critDamage += Math.max(0, c - 1); },
+  },
+  // every imbuement is burnt off the weapon; each imbuement card picked becomes +6% attack damage
+  quench: {
+    title: 'Quenched Steel', jp: '淬', cost: 'Lose all your imbuements', gain: '+6% {damage} per imbuement card', gs: ['baseDamage'],
+    cards: (p) => (p.picked || []).filter((c) => c.type === 'element' && !c.traded).length || 1,
+    gainFor(p) { return `+${6 * this.cards(p)}% {damage} (6% per imbuement card)`; },
+    needs: (p) => p.weapons.some((w) => Object.values(w.elements).some((v) => v > 0)),
+    get(p) { p.stats.baseDamage += 0.06 * this.cards(p); },
+    pay(p) { for (const w of p.weapons) for (const k in w.elements) w.elements[k] = 0; for (const c of p.picked || []) if (c.type === 'element') c.traded = true; },
+  },
+  // give up one card, then choose two new ones of its kind, each one rarity lower (game.js runs the choices)
+  splinter: {
+    title: 'Splintered Gift', jp: '分', cost: 'Give up one card of your choice', gain: 'Gain 2 of its kind, 1 rarity lower', split: true,
+    needs: (p) => (p.picked || []).some((c) => !c.traded && (c.type === 'stat' || c.type === 'element')) || p.talents.length > 0,
+    pay(p) { p.swapKeep = false; }, get(p) { p.swapKeep = true; }, // (free: the card you choose is kept, see Game.splinter)
+  },
+  // slower on your feet, but a second dash ready
+  shadowStep: {
+    title: 'Shadow Step', jp: '影歩', cost: '−20% {move}', gain: '+1 dash charge', cs: ['moveSpeed'], gs: ['dashCd'],
+    pay(p) { p.stats.moveSpeed *= 0.8; }, get(p) { p.stats.extraDash = (p.stats.extraDash || 0) + 1; p.dashCharges = (p.dashCharges ?? 1) + 1; },
   },
   covenant: {
     title: 'Imbued Covenant', jp: '元素', cost: 'No more critical hits', gain: 'Imbuements 2× as strong', cs: ['critChance'],
-    excl: ['executioner'], apply(p) { p.noCrit = true; p.elemMul = 2; },
+    excl: ['executioner'], pay(p) { p.noCrit = true; }, get(p) { p.elemMul = (p.elemMul || 1) * 2; },
   },
   executioner: {
-    title: 'Patient Executioner', jp: '処刑', cost: 'Attack cooldowns ×1.5', gain: 'Every hit is a critical hit', gs: ['critChance'],
-    excl: ['covenant'], apply(p) { p.stats.cooldownMul *= 1.5; p.alwaysCrit = true; },
-  },
-  singlePath: {
-    title: 'The Single Path', jp: '一道', cost: 'Keep only your first talent', gain: '−60% talent cooldown',
-    excl: ['bareBlade'], needs: (p) => !p.sac.includes('bareBlade'),
-    apply(p) { p.talents = p.talents.slice(0, 1); for (const t of p.talents) { t.cdMul *= 0.4; t.minMul = 0.4; } p.singlePath = true; },
+    title: 'Patient Executioner', jp: '処刑', cost: '+50% {atkcd}', gain: 'Every hit is a critical hit', cs: ['cooldownMul'], gs: ['critChance'],
+    excl: ['covenant'], pay(p) { p.stats.cooldownMul *= 1.5; }, get(p) { p.alwaysCrit = true; },
   },
   bloodOffering: {
-    title: 'Blood Offering', jp: '血供', cost: 'Lose 35 health now', gain: '+10% legendary chance',
-    excl: ['middleWay', 'dicemaster'], apply(p) { p.hp = Math.max(1, p.hp - 35); p.bloodOffering = true; },
-  },
-  middleWay: {
-    title: 'The Middle Way', jp: '中道', cost: 'No common or legendary cards', gain: 'Every card is rare or epic',
-    excl: ['bloodOffering', 'dicemaster'], apply(p) { p.middleWay = true; },
-  },
-  dicemaster: {
-    title: 'Dicemaster', jp: '博徒', cost: 'No rare or epic cards', gain: '1 in 4 cards is legendary',
-    excl: ['middleWay', 'bloodOffering'], apply(p) { p.dicemaster = true; },
+    title: 'Blood Offering', jp: '血供', cost: 'Lose 35 {health} now', gain: '+10% legendary chance',
+    pay(p) { p.hp = Math.max(1, p.hp - 35); }, get(p) { p.bloodOffering = true; },
   },
   boundSouls: {
-    title: 'Bound Souls', jp: '縁', coop: true, pact: true, cost: 'Both take +25% damage', gain: 'Share all damage taken',
-    apply(p) { p.bound = true; p.takenMul = (p.takenMul || 1) * 1.25; },
+    title: 'Bound Souls', jp: '縁', coop: true, pact: true, cost: 'Both take +15% damage', gain: 'Share all damage taken',
+    pay(p) { p.takenMul = (p.takenMul || 1) * 1.15; }, get(p) { p.bound = true; },
+  },
+  // Quick Swap: give up one card you hold, then choose a new card of the same kind (game.js runs the two choices)
+  quickSwap: {
+    title: 'Quick Swap', jp: '換', cost: 'Give up one of your cards', gain: 'Choose a new one of its kind', swap: true,
+    needs: (p) => (p.picked || []).some((c) => !c.traded && (c.type === 'stat' || c.type === 'element')) || p.talents.length > 0 || p.weapons.some((w) => w.arts && Object.keys(w.arts).length),
+    pay(p) { p.swapKeep = false; }, get(p) { p.swapKeep = true; },
   },
   lifebinder: {
     title: 'Lifebinder', jp: '献身', coop: true, cost: 'Syphon stops healing you', gain: 'Syphon heals your partner ×1.5',
-    needs: (p) => p.weapons.some((w) => w.elements.syphon > 0), apply(p) { p.lifebinder = true; },
+    needs: (p) => p.weapons.some((w) => w.elements.syphon > 0),
+    pay(p) { p.lifebinderSelf = false; }, get(p) { p.lifebinder = true; p.lifebinderSelf = true; },
+  },
+
+  // ---------------------------------------------------------------- weapon sacrifices (2026-11-21, the user's designs)
+  tipOath: {
+    title: 'Oath of the Blade Tip', jp: '切先', weapon: 'katanas', cost: '+20% {atkcd}', gain: '+50% {damage} at blade-tip', cs: ['cooldownMul'], gs: ['baseDamage'],
+    needs: weaponIs('katanas'), pay(p) { p.stats.cooldownMul *= 1.2; }, get(p) { p.tipMul = (p.tipMul || 1) * 1.5; },
+  },
+  stormDiscipline: {
+    title: 'Storm Discipline', jp: '嵐律', weapon: 'katanas', cost: 'Attacks cost +25% {energy}', gain: '+40% {damage} when hitting 4+ enemies', cs: ['kiCost'], gs: ['baseDamage'],
+    needs: weaponIs('katanas'), pay(p) { p.stats.kiCost *= 1.25; }, get(p) { p.stormDisc = 1.4; },
+  },
+  lightLoad: {
+    title: 'Lightened Load', jp: '軽装', weapon: 'knives', cost: 'Max. {s:5} 4 blades stuck in enemies', gain: '+1 dash charge', gs: ['dashCd'],
+    needs: weaponIs('knives'), pay(p) { p.maxStick = 4; }, get(p) { p.stats.extraDash = (p.stats.extraDash || 0) + 1; p.dashCharges = (p.dashCharges ?? 1) + 1; },
+  },
+  endlessStorm: {
+    title: 'Endless Storm', jp: '無尽嵐', weapon: 'knives', cost: '{B} costs +10% {energy}', gain: 'Every enemy its blades hit gives back 3 energy', cs: ['kiCost'], gs: ['energyRegen'],
+    needs: weaponIs('knives'), pay(p) { p.stormCostMul = 1.1; }, get(p) { p.stormRefund = 3; },
+  },
+  fragileFlow: {
+    title: 'Fragile Flow', jp: '脆流', weapon: 'bo', cost: 'Taking damage resets your combo', gain: 'Your combo goes up to 7',
+    needs: weaponIs('bo'), pay(p) { p.fragileFlow = true; }, get(p) { p.boMax = 7; },
+  },
+  heavyPole: {
+    title: 'Heavy Pole', jp: '重棍', weapon: 'bo', cost: '+20% {atkcd} on {X} below max combo', gain: '−20% {atkcd} and shockwave at max combo',
+    needs: weaponIs('bo'), pay(p) { p.heavyPoleSlow = 1.2; }, get(p) { p.heavyPoleMax = true; },
+  },
+  lonelySoul: {
+    title: 'Lonely Soul', jp: '孤魂', weapon: 'orb', cost: 'At most 1 spirit', gain: 'Every spirit rises as a heavy enemy',
+    needs: weaponIs('orb'), pay(p) { p.spiritMax = 1; }, get(p) { p.lonelySoul = true; },
+  },
+  soulTax: {
+    title: 'Soul Tax', jp: '魂税', weapon: 'orb', cost: 'Spirits drain 1 {energy} per s', gain: 'Spirits get +20% {health} and {damage}', cs: ['energyRegen'],
+    needs: weaponIs('orb'), pay(p) { p.soulTax = 1; }, get(p) { p.spiritBuff = 1.2; },
+  },
+  bareKnuckles: {
+    title: 'Bare Knuckles', jp: '素拳', weapon: 'gloves', cost: 'Imbuements are half as strong', gain: '3rd basic deals +100% {damage}', gs: ['baseDamage'],
+    needs: weaponIs('gloves'), pay(p) { p.elemMul = (p.elemMul || 1) * 0.5; }, get(p) { p.thirdPunch = true; },
+  },
+  stoneLaunch: {
+    title: 'Stone Launch', jp: '岩跳', weapon: 'gloves', cost: 'Take 4 damage per dash', gain: '+40% dash distance', gs: ['dashCd'],
+    needs: weaponIs('gloves'), pay(p) { p.dashHurt = 4; }, get(p) { p.dashDistMul = 1.4; },
   },
 };
+for (const S of Object.values(SACRIFICES)) S.apply = function (p) { this.get(p); this.pay(p); }; // (the gain first: Quenched Steel counts the cards it burns)
+
+// Satanist's Set: the first sacrifice of the run costs nothing
+export const sacFree = (p) => !!p && p.equip === 'satanist' && !p.satanUsed;
 
 // rarity weights for upgrade cards [common, rare, epic, legendary], changed by sacrifices
 export function rarityWeights(p, base) {
   const w = base.slice();
   if (p && p.bloodOffering) { w[3] += 10; w[0] -= 10; }
-  if (p && p.middleWay) { w[0] = 0; w[3] = 0; }
-  if (p && p.dicemaster) { w[0] = 75; w[1] = 0; w[2] = 0; w[3] = 25; }
   return w;
 }
 
@@ -88,7 +157,8 @@ export function rollSacrifices(p, coop, pact = null) {
     out.push(k);
   }
   if (pact && out.length === 2 && Math.random() < 0.5) out.reverse(); // the pact card isn't always on the left
-  return out.map((k) => ({ type: 'sacrifice', key: k, rarity: 0 }));
+  // (free: the Satanist's first; gain: what it really gives this player, when that depends on them)
+  return out.map((k) => ({ type: 'sacrifice', key: k, rarity: 0, free: sacFree(p) || undefined, gainText: SACRIFICES[k].gainFor ? SACRIFICES[k].gainFor(p) : undefined }));
 }
 
 // Co-op: both players' offers at once. Bound Souls (a pact that needs both of you) is offered to both players
@@ -106,11 +176,17 @@ export function rollSacrificeHands(players) {
 export function takeSacrifice(p, key) {
   const S = SACRIFICES[key];
   if (!S) return false;
+  const free = sacFree(p); if (free) p.satanUsed = true;
   p.sac.push(key);
-  (p.picked || (p.picked = [])).push({ type: 'sacrifice', key, rarity: 0 }); // for the pause menu's list of this run's cards
-  if (S.pact) return true;
-  S.apply(p);
+  (p.picked || (p.picked = [])).push({ type: 'sacrifice', key, rarity: 0, free: free || undefined }); // for the pause menu's list of this run's cards
+  if (S.pact) { p.pactFree = free; return true; }
+  applySacrifice(p, key, free);
   return false;
+}
+// the sacrifice's effect: its gain, and its cost unless it is free (Satanist's Set)
+export function applySacrifice(p, key, free = false) {
+  const S = SACRIFICES[key];
+  S.get(p); if (!free) S.pay(p);
 }
 
 // ---------------------------------------------------------------- the monk
@@ -217,11 +293,63 @@ function wrapText(ctx, str, maxW) {
 function drawSacGlyph(ctx, key, col) {
   ctx.save(); ctx.fillStyle = col; ctx.strokeStyle = col; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
   switch (key) {
+    case 'stormDiscipline': // a whirl of three blades around a calm centre
+      for (let k = 0; k < 3; k++) { ctx.save(); ctx.rotate((k * TAU) / 3); ctx.beginPath(); ctx.moveTo(4, -6); ctx.quadraticCurveTo(26, -20, 28, 4); ctx.quadraticCurveTo(18, -6, 4, 2); ctx.closePath(); ctx.fill(); ctx.restore(); }
+      ctx.beginPath(); ctx.arc(0, 0, 4, 0, TAU); ctx.fill(); break;
+    case 'lightLoad': // a feather over four short blades
+      for (let k = 0; k < 4; k++) ctx.fillRect(-16 + k * 9, 10, 4, 18);
+      ctx.beginPath(); ctx.moveTo(-22, 4); ctx.quadraticCurveTo(-2, -32, 24, -26); ctx.quadraticCurveTo(6, -10, -22, 4); ctx.fill(); break;
+    case 'endlessStorm': // a ring of blades with an arrow running round it
+      for (let k = 0; k < 8; k++) { const a = (k / 8) * TAU; ctx.save(); ctx.rotate(a); ctx.beginPath(); ctx.moveTo(14, -2.5); ctx.lineTo(28, 0); ctx.lineTo(14, 2.5); ctx.closePath(); ctx.fill(); ctx.restore(); }
+      ctx.lineWidth = 3.5; ctx.beginPath(); ctx.arc(0, 0, 9, 0.3, TAU - 0.5); ctx.stroke(); break;
+    case 'fragileFlow': // seven beads on a string, the last one cracked
+      for (let k = 0; k < 7; k++) { const a = Math.PI * (0.15 + (k / 6) * 0.7), x = Math.cos(a) * -24, y = Math.sin(a) * 20 - 6; ctx.beginPath(); ctx.arc(x, y, k === 6 ? 5.5 : 4.5, 0, TAU); ctx.fill(); }
+      ctx.lineWidth = 2; ctx.strokeStyle = '#7a0a14'; ctx.beginPath(); ctx.moveTo(17, -4); ctx.lineTo(22, 2); ctx.lineTo(19, 6); ctx.stroke(); break;
+    case 'heavyPole': // a thick staff over a shockwave ring
+      ctx.lineWidth = 4; ctx.beginPath(); ctx.ellipse(0, 16, 26, 8, 0, 0, TAU); ctx.stroke();
+      ctx.save(); ctx.rotate(0.5); ctx.fillRect(-4, -32, 8, 46); ctx.restore(); break;
+    case 'lonelySoul': // one large wisp
+      ctx.beginPath(); ctx.moveTo(0, -30); ctx.bezierCurveTo(22, -10, 20, 22, 0, 24); ctx.bezierCurveTo(-20, 22, -22, -4, -6, -14); ctx.bezierCurveTo(-2, -18, 2, -24, 0, -30); ctx.fill(); break;
+    case 'soulTax': // two wisps with a coin between them
+      for (const x of [-15, 15]) { ctx.beginPath(); ctx.moveTo(x, -22); ctx.bezierCurveTo(x + 12, -8, x + 10, 14, x, 16); ctx.bezierCurveTo(x - 10, 14, x - 12, -8, x, -22); ctx.fill(); }
+      ctx.lineWidth = 3; ctx.strokeStyle = '#7a0a14'; ctx.beginPath(); ctx.arc(0, 4, 7, 0, TAU); ctx.stroke(); ctx.strokeRect(-2.5, 1.5, 5, 5); break;
+    case 'bareKnuckles': // a fist with three strike marks, the third one big
+      ctx.beginPath(); ctx.roundRect(-16, -8, 26, 22, 6); ctx.fill(); ctx.fillRect(-16, 10, 18, 12);
+      ctx.lineWidth = 3; for (const [y, l] of [[-18, 6], [-8, 6], [4, 14]]) { ctx.beginPath(); ctx.moveTo(14, y); ctx.lineTo(14 + l, y); ctx.stroke(); } break;
+    case 'stoneLaunch': // a rock bursting up under an arc
+      ctx.beginPath(); ctx.moveTo(-14, 26); ctx.lineTo(-8, 8); ctx.lineTo(4, 4); ctx.lineTo(14, 12); ctx.lineTo(16, 26); ctx.closePath(); ctx.fill();
+      ctx.lineWidth = 3.5; ctx.setLineDash([5, 4]); ctx.beginPath(); ctx.moveTo(-24, 0); ctx.quadraticCurveTo(0, -40, 26, -6); ctx.stroke(); ctx.setLineDash([]);
+      ctx.beginPath(); ctx.moveTo(26, -6); ctx.lineTo(18, -10); ctx.lineTo(24, -16); ctx.closePath(); ctx.fill(); break;
+    case 'tipOath': // a long katana slanting down, its tip flashing with a star of light
+      ctx.save(); ctx.rotate(0.7);
+      ctx.beginPath(); ctx.moveTo(-3, -34); ctx.quadraticCurveTo(4, -6, 3, 22); ctx.lineTo(-2, 22); ctx.quadraticCurveTo(-1, -6, -3, -34); ctx.closePath(); ctx.fill();
+      ctx.fillRect(-8, 22, 16, 4); ctx.fillRect(-2.5, 26, 5, 10);
+      ctx.restore();
+      { const tx = Math.sin(0.7) * 34, ty = -Math.cos(0.7) * 34; ctx.beginPath(); for (let i = 0; i < 8; i++) { const an = (i / 8) * TAU, r = i % 2 ? 2.5 : 11; ctx.lineTo(tx + Math.cos(an) * r, ty + Math.sin(an) * r); } ctx.closePath(); ctx.fill(); }
+      break;
     case 'bareBlade': // a lone upright blade
       ctx.beginPath(); ctx.moveTo(0, -30); ctx.lineTo(5, -22); ctx.lineTo(5, 10); ctx.lineTo(-5, 10); ctx.lineTo(-5, -22); ctx.closePath(); ctx.fill();
       ctx.fillRect(-13, 11, 26, 5); ctx.fillRect(-3.5, 16, 7, 13); break;
-    case 'rooted': // a mountain
-      ctx.beginPath(); ctx.moveTo(-30, 24); ctx.lineTo(-6, -20); ctx.lineTo(4, -4); ctx.lineTo(12, -14); ctx.lineTo(30, 24); ctx.closePath(); ctx.fill(); break;
+    case 'glassEdge': // a cracked blade with a falling drop of blood
+      ctx.beginPath(); ctx.moveTo(-4, -30); ctx.lineTo(6, -22); ctx.lineTo(6, 14); ctx.lineTo(-6, 14); ctx.lineTo(-6, -22); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = '#7a0a14'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(-6, -8); ctx.lineTo(1, -4); ctx.lineTo(-3, 2); ctx.lineTo(6, 6); ctx.stroke();
+      ctx.fillStyle = col; ctx.fillRect(-13, 15, 26, 5);
+      ctx.beginPath(); ctx.moveTo(18, 6); ctx.bezierCurveTo(26, 16, 24, 24, 18, 26); ctx.bezierCurveTo(12, 24, 10, 16, 18, 6); ctx.fill(); break;
+    case 'quench': // a blade plunged into water, steam rising
+      ctx.fillRect(-3, -28, 6, 34);
+      ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(-26, 12); ctx.quadraticCurveTo(-13, 6, 0, 12); ctx.quadraticCurveTo(13, 18, 26, 12); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(-26, 22); ctx.quadraticCurveTo(-13, 16, 0, 22); ctx.quadraticCurveTo(13, 28, 26, 22); ctx.stroke();
+      ctx.lineWidth = 3; for (const x of [-14, 14]) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.quadraticCurveTo(x - 6, -10, x, -18); ctx.quadraticCurveTo(x + 6, -24, x, -30); ctx.stroke(); }
+      break;
+    case 'splinter': // one card breaking into two smaller ones
+      ctx.lineWidth = 3; rrect(ctx, -10, -28, 20, 26, 3); ctx.stroke();
+      ctx.lineWidth = 2.5; ctx.beginPath(); ctx.moveTo(-4, -28); ctx.lineTo(2, -18); ctx.lineTo(-3, -10); ctx.lineTo(3, -2); ctx.stroke();
+      ctx.save(); ctx.translate(-14, 16); ctx.rotate(-0.3); rrect(ctx, -8, -10, 16, 20, 3); ctx.fill(); ctx.restore();
+      ctx.save(); ctx.translate(14, 16); ctx.rotate(0.3); rrect(ctx, -8, -10, 16, 20, 3); ctx.fill(); ctx.restore(); break;
+    case 'shadowStep': // two footprints with a shadow streak between them
+      for (const [x, y, a] of [[-14, 14, -0.3], [12, -12, -0.3]]) { ctx.save(); ctx.translate(x, y); ctx.rotate(a); ctx.beginPath(); ctx.ellipse(0, 0, 6, 10, 0, 0, TAU); ctx.fill(); ctx.beginPath(); ctx.ellipse(0, -14, 4.5, 4.5, 0, 0, TAU); ctx.fill(); ctx.restore(); }
+      ctx.lineWidth = 3; for (const o of [-6, 0, 6]) { ctx.beginPath(); ctx.moveTo(-22 + o, 2 + o); ctx.lineTo(4 + o, -20 + o); ctx.stroke(); }
+      break;
     case 'smallCuts': // many small slashes
       ctx.lineWidth = 4.5;
       for (const [x, y] of [[-14, -14], [8, -18], [-18, 8], [4, 2], [16, 16], [-6, 22]]) { ctx.beginPath(); ctx.moveTo(x - 7, y + 6); ctx.lineTo(x + 7, y - 6); ctx.stroke(); }
@@ -234,26 +362,21 @@ function drawSacGlyph(ctx, key, col) {
       ctx.fillRect(-3, -26, 6, 56); // haft
       ctx.beginPath(); ctx.moveTo(2, -24); ctx.quadraticCurveTo(30, -26, 28, -6); ctx.quadraticCurveTo(26, 4, 30, 12); ctx.quadraticCurveTo(14, 4, 2, 2); ctx.closePath(); ctx.fill(); // blade
       ctx.restore(); break;
-    case 'singlePath': // one road narrowing to a point
-      ctx.beginPath(); ctx.moveTo(-20, 28); ctx.lineTo(-2, -20); ctx.lineTo(2, -20); ctx.lineTo(20, 28); ctx.closePath(); ctx.fill();
-      ctx.beginPath(); ctx.arc(0, -25, 4.5, 0, TAU); ctx.fill(); break;
     case 'bloodOffering': // a drop of blood
       ctx.beginPath(); ctx.moveTo(0, -30); ctx.bezierCurveTo(18, -6, 22, 8, 0, 26); ctx.bezierCurveTo(-22, 8, -18, -6, 0, -30); ctx.fill(); break;
-    case 'middleWay': // a balance
-      ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(0, -24); ctx.lineTo(0, 24); ctx.moveTo(-24, -14); ctx.lineTo(24, -14); ctx.moveTo(-14, 24); ctx.lineTo(14, 24); ctx.stroke();
-      for (const x of [-20, 20]) { ctx.beginPath(); ctx.moveTo(x - 9, 2); ctx.lineTo(x + 9, 2); ctx.lineTo(x, -14); ctx.closePath(); ctx.stroke(); ctx.beginPath(); ctx.arc(x, 2, 9, 0, Math.PI); ctx.fill(); }
-      break;
-    case 'dicemaster': { // two dice
-      const die = (x, y, a, pips) => {
-        ctx.save(); ctx.translate(x, y); ctx.rotate(a);
-        ctx.fillStyle = col; rrect(ctx, -12, -12, 24, 24, 5); ctx.fill();
-        ctx.fillStyle = '#7a0a14'; for (const [px, py] of pips) { ctx.beginPath(); ctx.arc(px * 6, py * 6, 2.6, 0, TAU); ctx.fill(); }
-        ctx.restore();
-      };
-      die(-10, -6, -0.25, [[-1, -1], [0, 0], [1, 1]]); die(12, 10, 0.3, [[-1, -1], [1, -1], [-1, 1], [1, 1], [0, 0]]); break;
-    }
     case 'boundSouls': // two linked rings
       ctx.lineWidth = 5; ctx.beginPath(); ctx.arc(-9, 0, 15, 0, TAU); ctx.stroke(); ctx.beginPath(); ctx.arc(9, 0, 15, 0, TAU); ctx.stroke(); break;
+    case 'quickSwap': // two arrows chasing each other around a card
+      ctx.save(); ctx.rotate(-0.15); ctx.lineWidth = 2.5; rrect(ctx, -9, -13, 18, 26, 3); ctx.stroke(); ctx.restore();
+      ctx.lineWidth = 4.5;
+      for (const s of [1, -1]) {
+        ctx.save(); ctx.scale(s, s);
+        ctx.beginPath(); ctx.arc(0, 0, 24, -2.6, -0.5); ctx.stroke();
+        const ax = Math.cos(-0.5) * 24, ay = Math.sin(-0.5) * 24;
+        ctx.beginPath(); ctx.moveTo(ax + 7, ay + 3); ctx.lineTo(ax - 1, ay - 8); ctx.lineTo(ax - 6, ay + 6); ctx.closePath(); ctx.fill();
+        ctx.restore();
+      }
+      break;
     case 'lifebinder': // a heart passed on
       ctx.beginPath(); ctx.moveTo(-4, 20); ctx.bezierCurveTo(-30, 2, -18, -22, -4, -8); ctx.bezierCurveTo(10, -22, 22, 2, -4, 20); ctx.fill();
       ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(12, 6); ctx.lineTo(28, 6); ctx.moveTo(22, 0); ctx.lineTo(28, 6); ctx.lineTo(22, 12); ctx.stroke(); break;
@@ -273,7 +396,7 @@ function rowBadge(ctx, x, y, size, stat, down) {
 }
 
 // drawn in base coordinates: 230 wide, h tall, centred on the origin
-export function drawSacrificeCard(ctx, card, w, h, t, st) {
+export function drawSacrificeCard(ctx, card, w, h, t, st, player = null) {
   const S = SACRIFICES[card.key];
   const x0 = -w / 2, y0 = -h / 2, sel = st.hover;
   // crimson aura (stronger, with a heartbeat, on the selected card)
@@ -419,9 +542,10 @@ export function drawSacrificeCard(ctx, card, w, h, t, st) {
   // in the cards' own font, with muted old colours (dried blood red / old gold) and room around the text
   const fy = iy + ih - 12;
   const ry = ny + 25, gap = 7, rh = Math.max(40, (fy - 21 - ry - gap) / 2);
-  const row = (y, label, body, down) => {
+  // struck: the Satanist's free sacrifice: the cost is still shown, greyed out and crossed through
+  const row = (y, label, body, down, struck = false) => {
     const rx = ix + 8, rw = iw - 16, pad = 9;
-    const col = down ? '#b8483e' : '#b89048', ink = down ? '#e8cfc4' : '#e8d9b2';
+    const col = struck ? '#8a807c' : down ? '#b8483e' : '#b89048', ink = struck ? '#9a908c' : down ? '#e8cfc4' : '#e8d9b2';
     const tg = ctx.createLinearGradient(0, y, 0, y + rh);
     tg.addColorStop(0, down ? 'rgba(74,16,14,0.62)' : 'rgba(70,52,20,0.56)'); tg.addColorStop(1, down ? 'rgba(46,10,8,0.62)' : 'rgba(44,32,12,0.56)');
     ctx.fillStyle = tg; rrect(ctx, rx, y, rw, rh, 1.5); ctx.fill();
@@ -440,20 +564,25 @@ export function drawSacrificeCard(ctx, card, w, h, t, st) {
     ctx.font = `900 10.5px "Zen Kaku Gothic New", sans-serif`; ctx.fillStyle = col;
     const ly = y + pad + 5;
     ctx.fillText(label, tx, ly);
-    const area0 = ly + 8, area1 = y + rh - pad + 1; // the text sits between the label and the bottom padding
-    let bs = 14, lines;
-    for (;;) { // shrink until it fits both the width (two lines at most) and the height
-      ctx.font = `800 ${bs}px "Zen Kaku Gothic New", sans-serif`; lines = wrapText(ctx, body, tw);
-      if ((lines.length <= 2 && lines.length * bs * 1.15 <= area1 - area0) || bs <= 8.5) break;
-      bs -= 0.5;
+    if (struck) { // what pays for it: a small tag after the label
+      const lw = ctx.measureText(label).width; ctx.font = '900 9px "Zen Kaku Gothic New", sans-serif';
+      const tag = 'FREE', tgw = ctx.measureText(tag).width + 10, tgx = rx + rw - pad - tgw; // (Satanist's Set: at the row's right end)
+      ctx.fillStyle = '#7a1018'; rrect(ctx, tgx, ly - 6.5, tgw, 13, 2); ctx.fill();
+      ctx.fillStyle = '#ffd8d0'; ctx.fillText(tag, tgx + 5, ly + 0.5);
     }
-    lines = lines.slice(0, 2);
-    const lh = bs * 1.15, top = area0 + Math.max(0, (area1 - area0 - lines.length * lh) / 2) + lh / 2;
-    ctx.fillStyle = ink; lines.forEach((l, k) => ctx.fillText(l, tx, top + k * lh));
+    const area0 = ly + 8, area1 = y + rh - pad + 1; // the text sits between the label and the bottom padding
+    // (icons and buttons in the text: {energy}, {health}, {damage}, {Y}... see cards.js drawRichText)
+    if (struck) ctx.globalAlpha *= 0.55;
+    drawRichText(ctx, player, body, tx, (area0 + area1) / 2 + 1, tw, 2, 13, 12.5, ink, { align: 'left', vcenter: true, maxH: area1 - area0 + 4 });
+    if (struck) { // crossed through
+      ctx.globalAlpha /= 0.55;
+      const cy = (area0 + area1) / 2 + 1; ctx.strokeStyle = '#d8ccc6'; ctx.lineWidth = 1.6;
+      ctx.beginPath(); ctx.moveTo(tx - 2, cy + 1); ctx.lineTo(tx + tw, cy - 1); ctx.stroke();
+    }
     ctx.textAlign = 'center';
   };
-  row(ry, 'YOU SACRIFICE', S.cost, true);
-  row(ry + rh + gap, 'YOU GAIN', S.gain, false);
+  row(ry, 'YOU SACRIFICE', S.cost, true, !!card.free);
+  row(ry + rh + gap, 'YOU GAIN', card.gainText || S.gain, false);
   // footer: a thin rule with a diamond, then the note
   ctx.strokeStyle = 'rgba(184,134,42,0.45)'; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(ix + 20, fy - 11); ctx.lineTo(-5, fy - 11); ctx.moveTo(5, fy - 11); ctx.lineTo(ix + iw - 20, fy - 11); ctx.stroke();

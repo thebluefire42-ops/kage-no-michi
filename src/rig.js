@@ -8,7 +8,9 @@ const FLASH = {
   hair: '#ffffff', metal: '#ffffff', wood: '#ffffff', accent: '#ffffff', scarf: '#ffffff', eye: '#ffffff', ink: '#ffffff',
 };
 
+export const SHADOW = { off: false }; // (no shadows at all under a Blood Moon)
 export function drawShadow(ctx, sx, sy, rx, alpha = 0.28) {
+  if (SHADOW.off) return;
   ctx.fillStyle = `rgba(25,18,35,${alpha})`;
   ctx.beginPath(); ctx.ellipse(sx, sy, rx, rx * 0.42, 0, 0, TAU); ctx.fill();
 }
@@ -218,9 +220,9 @@ export function drawWeapon(ctx, kind, hx, hy, ang, pal, extra = 0) {
       ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 0.7; ctx.beginPath(); ctx.moveTo(8, 2.4); ctx.quadraticCurveTo(23, 3.2, 39, 2.6); ctx.stroke();
       break;
     }
-    case 'crossbow': { // heavy arbalest: thick banded stock, steel prod, foot stirrup (drawn a bit compact)
-      ctx.scale(0.82, 0.82);
-      drawArbalest(ctx, pal, metal, extra);
+    case 'crossbow': { // heavy arbalest: thick banded stock, steel prod, foot stirrup; always drawn as on its weapon card
+      ctx.scale(0.64, 0.64);
+      drawArbalest(ctx, pal, metal, 0.7);
       break;
     }
     case 'kunai_volley': { // three kunai flying side by side in an arrowhead, each with motion streaks behind it
@@ -234,6 +236,41 @@ export function drawWeapon(ctx, kind, hx, hy, ang, pal, extra = 0) {
         drawWeapon(ctx, 'kunai', 0, 0, 0, pal);
         ctx.restore();
       }
+      break;
+    }
+    // the Restless Spirit Orb: a pale blue sphere hovering over the palm, souls turning inside it
+    case 'spiritorb': case 'orb_icon': {
+      ctx.rotate(-ang);
+      const T = performance.now() / 1000, icon = kind === 'orb_icon', R = icon ? 11 : 3.7; // (in the hand: 40% smaller since 2026-11-20, was 6.2)
+      ctx.translate(0, icon ? 0 : -R - 2 + Math.sin(T * 2.4) * 0.8);
+      ctx.save(); ctx.globalCompositeOperation = 'lighter';
+      const gl = ctx.createRadialGradient(0, 0, 0, 0, 0, R * 2.3);
+      gl.addColorStop(0, 'rgba(150,210,255,0.5)'); gl.addColorStop(1, 'rgba(120,190,255,0)');
+      ctx.fillStyle = gl; ctx.beginPath(); ctx.arc(0, 0, R * 2.3, 0, TAU); ctx.fill();
+      ctx.restore();
+      const body = ctx.createRadialGradient(-R * 0.3, -R * 0.35, R * 0.1, 0, 0, R);
+      body.addColorStop(0, 'rgba(230,246,255,0.95)'); body.addColorStop(0.55, 'rgba(120,180,240,0.85)'); body.addColorStop(1, 'rgba(40,70,140,0.9)');
+      ctx.fillStyle = body; ctx.beginPath(); ctx.arc(0, 0, R, 0, TAU); ctx.fill();
+      // little ghosts circling inside: a round head and a curling tail each
+      ctx.save(); ctx.beginPath(); ctx.arc(0, 0, R * 0.92, 0, TAU); ctx.clip();
+      for (let k = 0; k < 3; k++) {
+        const a = T * (1.4 + k * 0.3) + (k * TAU) / 3, gx = Math.cos(a) * R * 0.45, gy = Math.sin(a) * R * 0.3;
+        ctx.fillStyle = 'rgba(245,252,255,0.85)'; ctx.beginPath(); ctx.arc(gx, gy, R * 0.2, 0, TAU); ctx.fill();
+        ctx.strokeStyle = 'rgba(235,248,255,0.6)'; ctx.lineWidth = R * 0.14; ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(gx, gy); ctx.quadraticCurveTo(gx - Math.sin(a) * R * 0.4, gy + Math.cos(a) * R * 0.2, gx - Math.sin(a) * R * 0.5 - Math.cos(a) * R * 0.2, gy + Math.cos(a) * R * 0.35); ctx.stroke();
+      }
+      ctx.restore();
+      ctx.strokeStyle = 'rgba(200,235,255,0.9)'; ctx.lineWidth = icon ? 1.4 : 0.7; ctx.beginPath(); ctx.arc(0, 0, R, 0, TAU); ctx.stroke();
+      ctx.fillStyle = 'rgba(255,255,255,0.9)'; ctx.beginPath(); ctx.ellipse(-R * 0.38, -R * 0.42, R * 0.22, R * 0.13, -0.6, 0, TAU); ctx.fill();
+      break;
+    }
+    case 'orb_hip': { // stowed: a dimmer orb in a cord net at the hip
+      const R = 4.2;
+      ctx.strokeStyle = '#5a3f2c'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(0, -R - 4); ctx.lineTo(0, -R); ctx.stroke();
+      ctx.fillStyle = 'rgba(110,170,230,0.85)'; ctx.beginPath(); ctx.arc(0, 0, R, 0, TAU); ctx.fill();
+      ctx.fillStyle = 'rgba(230,246,255,0.8)'; ctx.beginPath(); ctx.arc(-1.2, -1.3, 1.3, 0, TAU); ctx.fill();
+      ctx.strokeStyle = 'rgba(90,63,44,0.85)'; ctx.lineWidth = 0.7;
+      ctx.beginPath(); ctx.moveTo(-R, 0); ctx.lineTo(R, 0); ctx.moveTo(0, -R); ctx.lineTo(0, R); ctx.arc(0, 0, R, 0, TAU); ctx.stroke();
       break;
     }
     case 'kunai': {
@@ -252,6 +289,43 @@ export function drawWeapon(ctx, kind, hx, hy, ang, pal, extra = 0) {
       }
       ctx.fillStyle = metal; ctx.fill(); ctx.strokeStyle = INK; ctx.lineWidth = 1; ctx.stroke();
       ctx.fillStyle = pal.accent || '#a33'; ctx.fillRect(26, -2, 3, 4);
+      break;
+    }
+    case 'gauntlet': { // the earth shaper's glove: a heavy dark leather fist with a cloth-wrapped cuff, stone plates over
+      // the knuckles (chiselled, riveted), the fingers curled under, and a stone seal on the back with an ember crack
+      ctx.scale(0.55, 0.55); // (about a fist's size in the hand; icons fit themselves)
+      ctx.strokeStyle = INK; ctx.lineWidth = 1.3; ctx.lineJoin = 'round';
+      // cuff: a cloth wrap with a rope tie
+      ctx.fillStyle = '#d8ccb0'; ctx.beginPath(); ctx.roundRect(-12, -4.8, 8, 9.6, 2); ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = 'rgba(90,70,50,0.75)'; ctx.lineWidth = 0.8;
+      for (const x of [-10.5, -8, -5.5]) { ctx.beginPath(); ctx.moveTo(x, -4.6); ctx.lineTo(x + 1.8, 4.6); ctx.stroke(); }
+      ctx.fillStyle = '#8a2a20'; ctx.fillRect(-7.4, -5.2, 1.6, 10.4); // the red cord
+      ctx.strokeStyle = INK; ctx.lineWidth = 1.3;
+      // the fist: dark leather, a lighter band where the light catches the top
+      ctx.fillStyle = pal.glove || '#5a3a22'; ctx.beginPath(); ctx.roundRect(-5, -6.5, 13, 13, 4.5); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = 'rgba(255,220,180,0.16)'; ctx.beginPath(); ctx.roundRect(-3.8, -5.6, 10.5, 3.2, 1.6); ctx.fill();
+      // the thumb, folded over the fingers
+      ctx.fillStyle = '#4a2e1a'; ctx.beginPath(); ctx.ellipse(1.5, 4.6, 4.4, 2.1, -0.15, 0, TAU); ctx.fill(); ctx.stroke();
+      // the stone seal on the back of the hand, its ember crack glowing
+      ctx.fillStyle = '#6e665e'; ctx.beginPath(); ctx.arc(0.2, -0.6, 3.2, 0, TAU); ctx.fill(); ctx.lineWidth = 1; ctx.stroke();
+      ctx.strokeStyle = 'rgba(255,150,60,0.95)'; ctx.lineWidth = 1.1; ctx.beginPath(); ctx.moveTo(-1.2, -2.8); ctx.lineTo(0.8, -0.8); ctx.lineTo(-0.4, 0.6); ctx.lineTo(1.2, 1.8); ctx.stroke();
+      ctx.strokeStyle = 'rgba(255,200,120,0.35)'; ctx.lineWidth = 2.6; ctx.beginPath(); ctx.moveTo(-1.2, -2.8); ctx.lineTo(0.8, -0.8); ctx.lineTo(-0.4, 0.6); ctx.stroke();
+      // stone knuckle plates: four chiselled blocks, a pale top edge, a rivet each
+      ctx.strokeStyle = INK; ctx.lineWidth = 1.1;
+      [-5.8, -2.8, 0.2, 3.2].forEach((y, i) => {
+        ctx.fillStyle = i % 2 ? '#857a6e' : '#958a7e'; ctx.beginPath(); ctx.roundRect(5.4, y, 5, 2.8, 1); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = 'rgba(255,250,235,0.35)'; ctx.fillRect(6.2, y + 0.5, 3.4, 0.7);
+        ctx.fillStyle = '#3a342e'; ctx.beginPath(); ctx.arc(6.4, y + 1.6, 0.5, 0, TAU); ctx.fill();
+      });
+      ctx.strokeStyle = 'rgba(40,30,24,0.8)'; ctx.lineWidth = 0.7; ctx.beginPath(); ctx.moveTo(8.8, -2.4); ctx.lineTo(9.6, -0.6); ctx.stroke(); // a crack in one plate
+      break;
+    }
+    case 'rifle': { // a matchlock (tanegashima): long dark barrel, wooden stock, a smouldering match cord
+      seg(ctx, -14, 1, 6, 0, 4.2, pal.wood || '#5a3a22');
+      seg(ctx, 4, -0.4, 40, -0.4, 2.2, pal.metal || '#3a3a40');
+      ctx.fillStyle = '#c8a050'; ctx.fillRect(14, -1.8, 2, 3); ctx.fillRect(28, -1.8, 2, 3);
+      ctx.strokeStyle = '#8a6a44'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(2, -1); ctx.quadraticCurveTo(-2, -6, -6, -4); ctx.stroke();
+      ctx.fillStyle = 'rgba(255,150,60,0.9)'; ctx.beginPath(); ctx.arc(-6, -4, 1.1, 0, TAU); ctx.fill();
       break;
     }
     case 'bow': {
@@ -303,6 +377,16 @@ export function drawWeapon(ctx, kind, hx, hy, ang, pal, extra = 0) {
       ctx.fillStyle = '#f0d070'; ctx.beginPath(); ctx.arc(31.5, 0, 1.3, 0, TAU); ctx.fill(); // jewel
       ctx.lineWidth = 0.9; ctx.strokeStyle = '#e8c870';
       for (const [rx, ry] of [[27.5, -5.2], [31, -6.2], [34.5, -5], [27.5, 5.2], [31, 6.2], [34.5, 5]]) { ctx.beginPath(); ctx.arc(rx, ry + Math.sign(ry) * 1.2, 1.5, 0, TAU); ctx.stroke(); }
+      break;
+    }
+    case 'book': { // the scholar's book: a stitched Japanese wahon, indigo cover with a paper title slip, held by its spine
+      ctx.fillStyle = '#efe4c8'; ctx.strokeStyle = INK; ctx.lineWidth = 1.2;
+      ctx.beginPath(); ctx.rect(2.5, -6.2, 11, 12.4); ctx.fill(); ctx.stroke(); // the page block
+      ctx.fillStyle = '#2e3e6a'; ctx.beginPath(); ctx.rect(1, -7, 11.5, 13); ctx.fill(); ctx.stroke(); // the cover
+      ctx.fillStyle = '#f4ecd8'; ctx.fillRect(7.2, -5.6, 3, 8.4); ctx.strokeStyle = 'rgba(40,30,20,0.6)'; ctx.lineWidth = 0.6; ctx.strokeRect(7.2, -5.6, 3, 8.4); // title slip
+      ctx.strokeStyle = '#d8c8a0'; ctx.lineWidth = 0.8; // the stitched spine
+      for (const y of [-5, -1.7, 1.7, 5]) { ctx.beginPath(); ctx.moveTo(1, y); ctx.lineTo(3.2, y); ctx.stroke(); }
+      ctx.beginPath(); ctx.moveTo(3.2, -6.4); ctx.lineTo(3.2, 6.4); ctx.stroke();
       break;
     }
     case 'spiritorb': { // a scholar's floating blue spirit orb, held out in the hand
@@ -672,6 +756,7 @@ function solvePose(o, aimL) {
       P.lean += 0.06;
     }
     else if (grip === 'shield') { P.f1 = 0.55 + swing * 0.2; P.f2 = -0.15; P.fW = 0; P.n1 = 1.2 - swing * 0.3; P.n2 = 0.9 - swing * 0.3; }
+    else if (grip === 'orb') { P.n1 = 0.6 + swing * 0.15; P.n2 = -0.55; P.nW = -0.55; } // the spirit orb hovers over an open palm
     else { P.nW = P.n2 + 0.35; }
     if (o.weapon2) P.fW = grip === 'dual' ? P.f2 + Math.PI - 0.35 : P.f2 + 0.35;
   }
@@ -679,11 +764,14 @@ function solvePose(o, aimL) {
   if (!pose) return P;
   const t = clamp(pose.t, 0, 1);
   switch (pose.kind) {
-    case 'slash': {
-      const a = lerp(aimL - 2.0, aimL + 1.35, ease.outCubic(t));
+    case 'slash': { // v (katanas): 0 high-to-low cut, 1 a rising cut from the hip, 2 the big overhead cut of the rhythm
+      const v = pose.v || 0, k = ease.outCubic(t), arc = Math.sin(t * Math.PI);
+      const a = v === 1 ? lerp(aimL + 1.7, aimL - 1.5, k) : v === 2 ? lerp(aimL - 2.6, aimL + 1.6, k) : lerp(aimL - 2.0, aimL + 1.35, k);
       if (pose.side > 0) { P.n1 = a; P.n2 = a - 0.25; P.nW = a - 0.15; }
       else { P.f1 = a; P.f2 = a - 0.25; P.fW = a - 0.15; }
-      P.lean += 0.12 * Math.sin(t * Math.PI);
+      P.lean += (v === 2 ? 0.26 : v === 1 ? 0.06 : 0.12) * arc;
+      if (v === 1) { P.tuck = 0.25 * arc; P.drop = 2 * arc; P.sN = 0.3 * arc; P.sF = -0.25 * arc; }
+      if (v === 2) { P.sN = 0.45 * arc; P.sF = -0.45 * arc; P.drop = 2.5 * arc; P.tuck = 0.2 * arc; }
       break;
     }
     case 'cleave': case 'strike': {
@@ -705,15 +793,23 @@ function solvePose(o, aimL) {
       P.n1 = aimL; P.n2 = aimL; P.nW = aimL; P.f1 = aimL + 0.2; P.f2 = aimL; P.lean += 0.25;
       break;
     }
-    case 'throw': {
-      const a = t < 0.3 ? lerp(1.2, -2.2, t / 0.3) : lerp(-2.2, aimL, ease.outCubic((t - 0.3) / 0.7));
+    case 'throw': { // v (knives): 0 overhand, 1 a flat sidearm whip from behind, 2 a low underhand flick
+      const v = pose.v || 0, arc = Math.sin(t * Math.PI);
+      const a = v === 1 ? (t < 0.25 ? lerp(1.0, 2.7, t / 0.25) : lerp(2.7, aimL, ease.outCubic((t - 0.25) / 0.75)))
+        : v === 2 ? (t < 0.25 ? lerp(1.2, 2.1, t / 0.25) : lerp(2.1, aimL + 0.25, ease.outCubic((t - 0.25) / 0.75)))
+          : t < 0.3 ? lerp(1.2, -2.2, t / 0.3) : lerp(-2.2, aimL, ease.outCubic((t - 0.3) / 0.7));
       if (pose.side > 0) { P.n1 = a; P.n2 = a - 0.1; P.nW = a; } else { P.f1 = a; P.f2 = a - 0.1; P.fW = a; }
-      P.lean += 0.1 * Math.sin(t * Math.PI);
+      P.lean += (v === 1 ? 0.18 : 0.1) * arc;
+      if (v === 1) { P.sN = 0.3 * arc; P.sF = -0.3 * arc; }
+      if (v === 2) { P.tuck = 0.35 * arc; P.drop = 2.5 * arc; P.lean += 0.08 * arc; }
       break;
     }
-    case 'shoot': {
+    case 'shoot': { // v (crossbow): 0 standing, 1 a shot from one knee, 2 braced in a wide stance, leaning into it
+      const v = pose.v || 0;
       P.n1 = aimL + 0.35; P.n2 = aimL; P.nW = aimL; P.f1 = aimL + 0.55; P.f2 = aimL + 0.05;
       P.lean -= 0.18 * (1 - t); P.pull = t;
+      if (v === 1) { P.tuck = 0.75; P.drop = 5; P.sN = 0.5; P.sF = -0.6; P.lean += 0.08; }
+      if (v === 2) { P.sN = 0.45; P.sF = -0.5; P.tuck = 0.2; P.drop = 1.5; P.lean += 0.14 * (1 - t) + 0.06; }
       break;
     }
     case 'draw': { // bow draw
@@ -749,16 +845,23 @@ function solvePose(o, aimL) {
       break;
     }
     // shishi shield: bash (shield thrust forward, shoulder behind it) and Bulwark (crouched behind it)
-    case 'shieldBash': {
-      const k = t < 0.5 ? ease.outCubic(t / 0.5) : 1 - (t - 0.5) * 0.6;
-      P.f1 = lerp(0.55, 0.05, k); P.f2 = lerp(-0.15, -0.05, k); P.n1 = lerp(1.2, 0.4, k); P.n2 = lerp(0.9, 0.1, k);
-      P.lean += 0.32 * k; P.tuck = 0.15 * k;
+    case 'shieldBash': { // v (shield): 0 the shield square in front, 1 a low driving charge, 2 shield high, shoulder in
+      const v = pose.v || 0, k = t < 0.5 ? ease.outCubic(t / 0.5) : 1 - (t - 0.5) * 0.6;
+      P.f1 = lerp(0.55, v === 2 ? -0.35 : 0.05, k); P.f2 = lerp(-0.15, v === 2 ? -0.4 : -0.05, k); P.n1 = lerp(1.2, v === 2 ? 1.4 : 0.4, k); P.n2 = lerp(0.9, v === 2 ? 0.6 : 0.1, k);
+      P.lean += (v === 1 ? 0.48 : v === 2 ? 0.22 : 0.32) * k; P.tuck = (v === 1 ? 0.45 : 0.15) * k;
+      if (v === 1) { P.drop = 3.5 * k; P.sN = 0.55 * k; P.sF = -0.6 * k; }
+      if (v === 2) { P.sN = 0.35 * k; P.sF = -0.35 * k; }
       break;
     }
     case 'shieldGuard': {
       const brace = Math.min(1, t * 8);
       P.f1 = lerp(0.55, 0.35, brace); P.f2 = lerp(-0.15, -0.35, brace); P.n1 = 0.7; P.n2 = -0.1;
       P.lean += 0.14 * brace; P.tuck = 0.65 * brace;
+      break;
+    }
+    case 'raise': { // spirit orb special: the orb lifted high overhead, the other hand open at the side
+      const k = ease.outCubic(Math.min(1, t / 0.3)), a = lerp(P.n1, -1.7, k) + Math.sin(t * 18) * 0.03 * k;
+      P.n1 = a; P.n2 = a - 0.15; P.nW = a - 0.15; P.f1 = lerp(P.f1, 0.5, k); P.f2 = lerp(P.f2, 0.9, k); P.lean -= 0.12 * k;
       break;
     }
     case 'cast': {
@@ -802,6 +905,133 @@ function solvePose(o, aimL) {
     }
     case 'hurt': { P.lean -= 0.3 * (1 - t); P.n1 = 0.4; P.f1 = 0.6; break; }
     case 'jump': { P.tuck = Math.sin(t * Math.PI); P.n1 = -0.6; P.f1 = 0.2; break; }
+    case 'stomp': { // the gloves: a small tactical stomp with one foot (knee up, then down hard), fists held ready
+      P.stomp = t < 0.42 ? Math.sin((t / 0.42) * Math.PI / 2) : Math.max(0, 1 - (t - 0.42) / 0.12);
+      const land = t > 0.42 && t < 0.75 ? Math.sin(((t - 0.42) / 0.33) * Math.PI) : 0;
+      P.drop = 2.5 * land; P.lean += 0.12 * P.stomp - 0.05 * land; P.n1 = 0.75; P.n2 = -0.4; P.f1 = 0.95; P.f2 = -0.25;
+      break;
+    }
+    case 'heavySweep': { // heavy sword: a quick, flat sweep from one side to the other; v 0 at knee height, 1 a little
+      // higher at the waist with a step in, 2 a dropping sweep that ends deep in the knees
+      const v = pose.v || 0, k = ease.outCubic(t), s = pose.side || 1, lift = v === 1 ? -0.35 : v === 2 ? 0.2 : 0, a = aimL + lift + s * lerp(1.5, -1.3, k);
+      const arc = Math.sin(t * Math.PI);
+      P.n1 = a + 0.55; P.n2 = a + 0.35; P.nW = a + 0.25; P.f1 = a + 0.75; P.f2 = a + 0.4; P.twoHand = true;
+      P.tuck = (v === 2 ? 0.6 : v === 1 ? 0.15 : 0.35) * Math.sin(Math.min(1, t * 1.4) * Math.PI); P.lean += (v === 2 ? 0.22 : 0.14) * arc;
+      if (v === 1) { P.sN = 0.45 * arc; P.sF = -0.4 * arc; }
+      if (v === 2) { P.drop = 4 * arc; P.sN = 0.3 * arc; P.sF = -0.5 * arc; }
+      break;
+    }
+    case 'vault': { // bo: one hand on the planted stick, legs whipped round tight, the free arm out for balance
+      const s = Math.sin(Math.min(1, t * 1.15) * Math.PI);
+      P.n1 = lerp(0.2, -1.0, s); P.n2 = lerp(-0.2, -1.3, s); P.nW = 1.57; // (holding the stick)
+      P.f1 = lerp(1.0, 0.1, s); P.f2 = lerp(0.6, 0.3, s); // the other arm flung out
+      P.tuck = 0.95 * s; P.lean += 0.35 * s;
+      break;
+    }
+    case 'vaultLand': { // bo: dropping into a low ready crouch, the stick across the body
+      const c = 1 - ease.outCubic(t);
+      P.tuck = 0.7 * c; P.drop = 6 * c; P.lean += 0.3 * c; P.n1 = 0.9; P.n2 = 0.1; P.nW = -0.3; P.f1 = 1.0; P.f2 = 0.3;
+      break;
+    }
+    case 'backstep': { // crossbow: leaning back in the air, the bow still held level at the aim
+      P.n1 = aimL + 0.35; P.n2 = aimL; P.nW = aimL; P.f1 = aimL + 0.55; P.f2 = aimL + 0.05;
+      P.lean -= 0.35 * Math.sin(t * Math.PI); P.tuck = 0.5 * Math.sin(t * Math.PI); P.pull = t > 0.35 ? 0 : 1;
+      break;
+    }
+    case 'discThrow': { // shield: the shield arm whips across the body and flings it out flat
+      const a = t < 0.3 ? lerp(0.4, 2.4, ease.outCubic(t / 0.3)) : lerp(2.4, -0.4, ease.outCubic(Math.min(1, (t - 0.3) / 0.35)));
+      P.f1 = a; P.f2 = a - 0.3; P.fW = a; P.n1 = 1.1; P.n2 = 0.6; P.lean += 0.15 * Math.sin(t * Math.PI);
+      break;
+    }
+    case 'orbDrop': { // orb: the hand comes down hard, palm first, throwing the orb at the ground
+      const a = t < 0.3 ? lerp(0.6, -1.6, ease.outCubic(t / 0.3)) : lerp(-1.6, 1.4, ease.outCubic(Math.min(1, (t - 0.3) / 0.3)));
+      P.n1 = a; P.n2 = a + 0.2; P.nW = a; P.lean += t < 0.3 ? -0.1 : 0.25 * Math.sin(((t - 0.3) / 0.7) * Math.PI); P.tuck = t > 0.3 ? 0.3 * Math.sin(((t - 0.3) / 0.7) * Math.PI) : 0;
+      break;
+    }
+    case 'haloSweep': { // holy staff: a level sweep at arm's length, the head of the staff tracing the arc
+      const s = pose.side || 1, a = aimL + s * lerp(0.9, -0.9, ease.inOutSine(Math.min(1, t * 1.3)));
+      P.n1 = a + 0.15; P.n2 = a; P.nW = a - 0.05; P.f1 = a + 0.4; P.f2 = a + 0.1; P.twoHand = true; P.lean += 0.12;
+      break;
+    }
+    // ---- Earth Shaper's Gloves: a martial artist's footwork. Guard up (lead fist by the chin, rear fist at the hip),
+    // quick stamps into wide low stances, strikes that snap out and come straight back (sN / sF: leg stance)
+    case 'gStomp': { // a sharp knee-up stamp that drops into a wide horse stance, hands in guard
+      const up = t < 0.38 ? ease.outCubic(t / 0.38) : 0, land = t < 0.38 ? 0 : ease.outCubic(Math.min(1, (t - 0.38) / 0.18));
+      const hold = t < 0.38 ? 0 : 1 - Math.max(0, (t - 0.8) / 0.2);
+      P.stomp = up * (t < 0.38 ? 1 : 0); // the knee comes high and fast
+      P.sN = 0.55 * land * hold; P.sF = -0.5 * land * hold; // feet planted wide
+      P.tuck = 0.38 * land * hold; P.drop = 3.5 * land * hold - 1.5 * up; P.lean += 0.1 * land * hold - 0.06 * up;
+      P.n1 = 0.85; P.n2 = -0.95; P.nW = P.n2; // lead fist up by the chin
+      P.f1 = 1.85; P.f2 = 0.25; // rear fist chambered at the hip
+      break;
+    }
+    case 'gPunch': { // v 0: a straight reverse punch (hips turn in, the rear fist snaps out, the other hand yanked back
+      // to the hip, front foot stepping in); v 1: a fast lead-hand jab from the guard, light on the feet; v 2: a
+      // hook, the rear fist swinging round level with the elbow bent, the whole body turning into it
+      const v = pose.v || 0, out = ease.outExpo(Math.min(1, t / (v === 1 ? 0.22 : 0.28))), back = t > 0.62 ? ease.inOutSine((t - 0.62) / 0.38) : 0, k = out * (1 - back);
+      if (v === 1) {
+        P.n1 = lerp(0.85, aimL - 0.05, k); P.n2 = lerp(-0.95, aimL, k); P.nW = P.n2; // the guard fist snapped straight out
+        P.f1 = 1.85; P.f2 = 0.25; // the other fist stays loaded at the hip
+        P.sN = 0.35 + 0.2 * k; P.sF = -0.35 - 0.15 * k; P.tuck = 0.25; P.drop = 2; P.lean += 0.18 * k;
+      } else if (v === 2) {
+        P.n1 = lerp(1.85, aimL - 0.55, k); P.n2 = lerp(0.25, aimL + 0.55, k); P.nW = P.n2; // elbow raised high and bent, the fist driving round and down
+        P.f1 = lerp(0.85, 1.9, k); P.f2 = lerp(-0.95, 0.15, k);
+        P.sN = 0.5 * k + 0.2; P.sF = -0.55 * k - 0.2; P.tuck = 0.35 + 0.15 * k; P.drop = 3 + 1.5 * k; P.lean += 0.4 * k;
+      } else {
+        P.n1 = lerp(1.85, aimL, k); P.n2 = lerp(0.25, aimL, k); P.nW = P.n2; // the striking arm, dead straight at full extension
+        P.f1 = lerp(0.85, 1.9, k); P.f2 = lerp(-0.95, 0.15, k); // the pulling hand
+        P.sN = 0.7 * k + 0.2; P.sF = -0.75 * k - 0.2; P.tuck = 0.3 + 0.1 * k; P.drop = 2.5 + 1.5 * k;
+        P.lean += 0.32 * k;
+      }
+      break;
+    }
+    case 'staffCast': { // holy staff: v 0 the head pointed straight at the aim, 1 raised high then brought down to point,
+      // 2 swept up from low; the free hand follows the shaft
+      const v = pose.v || 0, k = ease.outCubic(Math.min(1, t / 0.45)), arc = Math.sin(t * Math.PI);
+      const from = v === 1 ? -1.9 : v === 2 ? 1.2 : aimL + 0.6, s = lerp(from, aimL - 0.35, k);
+      P.n1 = s + 0.55; P.n2 = s + 0.1; P.nW = s - 0.25; P.f1 = s + 0.85; P.f2 = s + 0.35;
+      P.lean += (v === 1 ? 0.2 : 0.12) * arc - (v === 1 ? 0.12 * (1 - k) : 0);
+      if (v === 2) { P.tuck = 0.3 * arc; P.drop = 2.5 * arc; }
+      if (v === 1) { P.sN = 0.35 * arc; P.sF = -0.3 * arc; }
+      break;
+    }
+    case 'orbCast': { // spirit orb: v 0 a palm push straight out, 1 the orb lifted overhead and released down the aim,
+      // 2 a flick from behind the hip; the wisp leaves at the end of the arm
+      const v = pose.v || 0, k = ease.outCubic(Math.min(1, t / 0.5)), arc = Math.sin(t * Math.PI);
+      const from = v === 1 ? -2.0 : v === 2 ? 2.4 : aimL + 0.9, a = lerp(from, aimL - 0.05, k);
+      P.n1 = a; P.n2 = a - 0.15; P.nW = P.n2; P.f1 = 1.2; P.f2 = 0.6;
+      P.lean += (v === 0 ? 0.2 : 0.12) * arc;
+      if (v === 0) { P.sN = 0.3 * arc; P.sF = -0.25 * arc; }
+      if (v === 2) { P.tuck = 0.25 * arc; P.drop = 2 * arc; }
+      break;
+    }
+    case 'uppercut': { // gloves: a rising uppercut ("rising dragon"): a short dip, then the whole body drives up off
+      // the back foot, the knee rising with the fist, the guard hand pulled to the hip
+      const load = t < 0.25 ? ease.inOutSine(t / 0.25) : 1, up = t < 0.25 ? 0 : ease.outExpo(Math.min(1, (t - 0.25) / 0.2));
+      const settle = t > 0.7 ? ease.inOutSine((t - 0.7) / 0.3) : 0, sink = load * (1 - up), air = up * (1 - settle);
+      P.n1 = lerp(lerp(0.9, 2.0, load), -1.45, up) + 1.2 * settle; P.n2 = lerp(lerp(-0.9, 2.5, load), -1.6, up) + 0.9 * settle; P.nW = P.n2;
+      P.f1 = lerp(lerp(0.85, 0.5, load), 1.85, up); P.f2 = lerp(lerp(-0.95, -1.3, load), 0.2, up);
+      P.sN = 0.4 * sink; P.sF = -0.5 * sink - 0.35 * air; // low split stance, then the back leg trails as you rise
+      P.stomp = 0.85 * air; // the knee drives up with the punch
+      P.tuck = 0.65 * sink; P.drop = 6 * sink - 5 * air; // deep, then up off the ground
+      P.lean += 0.28 * sink - 0.25 * air;
+      break;
+    }
+    case 'gSlam': { // Earthen Prison: a short hop, then both fists driven into the ground in a deep, wide stance
+      const hop = t < 0.16 ? Math.sin((t / 0.16) * Math.PI / 2) : 0, hit = t < 0.16 ? 0 : ease.outExpo(Math.min(1, (t - 0.16) / 0.12));
+      const rise = t > 0.72 ? ease.inOutSine((t - 0.72) / 0.28) : 0, low = hit * (1 - rise);
+      const a = lerp(-1.3, 1.45, hit), b = lerp(-1.9, 1.55, hit); // both arms: raised, then hammered down
+      P.n1 = lerp(a, 0.85, rise); P.n2 = lerp(b, -0.95, rise); P.nW = P.n2; P.f1 = lerp(a + 0.1, 1.85, rise); P.f2 = lerp(b + 0.1, 0.25, rise);
+      P.stomp = 0.7 * hop; P.sN = 0.7 * low; P.sF = -0.7 * low;
+      P.tuck = 0.85 * low; P.drop = 8 * low - 3 * hop; P.lean += 0.45 * low - 0.1 * hop;
+      break;
+    }
+    case 'stormThrow': { // knives: quick alternating flicks while turning on the spot
+      const a = lerp(-1.2, aimL, ease.outCubic(t));
+      if ((pose.side || 1) > 0) { P.n1 = a; P.n2 = a - 0.1; P.nW = a; } else { P.f1 = a; P.f2 = a - 0.1; P.fW = a; }
+      P.tuck = 0.2; P.lean += 0.08;
+      break;
+    }
     case 'kneel': { // on one knee, head bowed (t: 0 = upright kneel, 1 = slumped)
       P.tuck = 0.95; P.drop = 7.5; P.lean += 0.25 + t * 0.25; P.n1 = 1.25; P.n2 = 1.0; P.f1 = 1.35; P.f2 = 1.1;
       if (o.weapon) { P.nW = 1.35; }
@@ -879,6 +1109,8 @@ export function drawHumanoid(ctx, o) {
     ctx.closePath();
     ctx.fillStyle = pal.scarf; ctx.fill(); ctx.strokeStyle = INK; ctx.lineWidth = 1; ctx.stroke();
   }
+  const G = o.gear ? { shY, hipY, lx, hw: 5 * fat, shN, shF, mv, t, back, fat } : null;
+  if (G) gearBack(ctx, o.gear, pal, G);
 
   const armW = 3.6 * (o.armW || 1);
   const legW = 4.2 * (o.legW || 1);
@@ -888,7 +1120,7 @@ export function drawHumanoid(ctx, o) {
     const hx = ex + Math.cos(a2) * L2, hy = ey + Math.sin(a2) * L2;
     const col = o.bareArms ? pal.skin : (isNear ? pal.cloth : pal.cloth2);
     seg(ctx, sh[0], sh[1], ex, ey, armW, col);
-    seg(ctx, ex, ey, hx, hy, armW * 0.9, o.bareArms ? pal.skin : col);
+    seg(ctx, ex, ey, hx, hy, armW * 0.9, o.bareArms ? pal.skin : o.gear === 'martial' && pal.wrap ? pal.wrap : col);
     blob(ctx, hx, hy, 2.1 * (o.armW || 1), pal.skin, INK, 1);
     if (weaponKind && wAng !== null) drawWeapon(ctx, weaponKind, hx, hy, wAng, pal, P.pull);
     return [hx, hy];
@@ -912,6 +1144,7 @@ export function drawHumanoid(ctx, o) {
       ctx.restore();
     }
     else if (bw === 'holystaff') drawWeapon(ctx, bw, -2 + lx * 0.6, hipY + 8, -1.95, pal); // head up behind the shoulder, not by the feet
+    else if (bw === 'orb_hip') drawWeapon(ctx, bw, 3 + lx * 0.5, hipY + 1, 0, pal); // hung at the hip in a cord net
     else drawWeapon(ctx, bw, -6 + lx * 0.6, shY + 10, 2.3, pal);
   };
   if (o.backWeapon && !back) drawStowed(false);
@@ -936,20 +1169,20 @@ export function drawHumanoid(ctx, o) {
 
   // legs
   const legSwing = Math.sin(w) * 0.75 * mv;
-  const drawLeg = (hx, sw, col) => {
+  const drawLeg = (hx, sw, col, lift = 0) => { // (lift: the stomping leg, knee raised)
     const tuck = P.tuck;
-    const a = Math.PI / 2 - sw - tuck * 0.9;
+    const a = Math.PI / 2 - sw - tuck * 0.9 - lift * 1.15;
     const kx = hx + Math.cos(a) * 7.5, ky = hipY + Math.sin(a) * 7.5;
     const bend = Math.max(0, -Math.sin(w + (sw > 0 ? 0 : Math.PI))) * 0.9 * mv + tuck * 1.6;
-    const a2 = a + bend;
+    const a2 = a + bend + lift * 1.7;
     const fx2 = kx + Math.cos(a2) * 7.5, fy2 = ky + Math.sin(a2) * 7.5;
     seg(ctx, hx, hipY, kx, ky, legW, col);
     seg(ctx, kx, ky, fx2, fy2, legW * 0.85, col);
     ctx.fillStyle = INK; ctx.beginPath(); ctx.ellipse(fx2 + 1.5, fy2 + 0.5, 3, 1.6, 0, 0, TAU); ctx.fill();
   };
   if (!o.robe) {
-    drawLeg(-1.5, -legSwing, pal.cloth2);
-    drawLeg(1.5, legSwing, o.bareLegs ? pal.skin : pal.cloth2);
+    drawLeg(-1.5, -legSwing + (P.sF || 0), pal.cloth2);
+    drawLeg(1.5, legSwing + (P.sN || 0), o.bareLegs ? pal.skin : pal.cloth2, P.stomp || 0);
   }
 
   // torso
@@ -1012,16 +1245,110 @@ export function drawHumanoid(ctx, o) {
     ctx.beginPath(); ctx.rect(shN[0] - 3, shN[1] - 1, 7, 7); ctx.fill(); ctx.stroke();
   }
 
+  if (G) gearBody(ctx, o.gear, pal, G);
   if (o.backWeapon && back) drawStowed(true);
 
   // head
   drawHead(ctx, o.head || 'hood', 1 + lx * 1.1, shY - 6.5, pal, back, t, o);
+  if (G) gearHead(ctx, o.gear, pal, 1 + lx * 1.1, shY - 6.5, G);
 
   if (o.weapon === 'shield' && !back) drawHeldShield();
   // near arm (in front of body)
   drawArm(shN, P.n1, P.n2, o.weapon === 'shield' ? null : o.weapon, P.nW, true);
 
   ctx.restore();
+}
+
+// ---------------- equipment gear (o.gear: the player's equipment set, see equipment.js) ----------------
+// G = { shY, hipY, lx, hw, shN, shF, mv, t, back, fat }
+function gearBack(ctx, gear, pal, G) {
+  const { shY, hipY, lx, t, mv } = G;
+  if (gear === 'feather') { // a mantle of white feathers fanning out from the shoulders, rippling as you run
+    for (let i = 0; i < 6; i++) {
+      const a = Math.PI * (0.62 + i * 0.075) + Math.sin(t * 9 + i * 0.8) * (0.04 + mv * 0.06);
+      const L = 13 + (i % 2) * 3 + mv * 2, x0 = -2 + lx, y0 = shY + 2;
+      ctx.save(); ctx.translate(x0, y0); ctx.rotate(a);
+      ctx.fillStyle = i % 2 ? (pal.feather2 || '#9fb8bf') : (pal.feather || '#f1f4ef');
+      ctx.beginPath(); ctx.moveTo(0, 0); ctx.quadraticCurveTo(L * 0.5, -3.2, L, 0); ctx.quadraticCurveTo(L * 0.5, 3.2, 0, 0); ctx.fill();
+      ctx.strokeStyle = INK; ctx.lineWidth = 0.9; ctx.stroke();
+      ctx.strokeStyle = 'rgba(60,80,90,0.55)'; ctx.lineWidth = 0.6; ctx.beginPath(); ctx.moveTo(1, 0); ctx.lineTo(L - 1.5, 0); ctx.stroke();
+      ctx.restore();
+    }
+  } else if (gear === 'tactician') { // a short haori cape behind, gold-edged, and a scroll case slung across the back
+    const sw = Math.sin(t * 6) * 0.8 * (0.4 + mv);
+    ctx.beginPath(); ctx.moveTo(-6 + lx, shY + 1); ctx.lineTo(4 + lx, shY + 1); ctx.lineTo(1 + lx * 0.4, hipY + 4); ctx.lineTo(-12 + sw, hipY + 3 + sw);
+    ctx.closePath(); ctx.fillStyle = pal.cloth2; ctx.fill(); ctx.strokeStyle = INK; ctx.lineWidth = 1.2; ctx.stroke();
+    ctx.strokeStyle = pal.trim || '#d8ac40'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(1 + lx * 0.4, hipY + 3); ctx.lineTo(-11 + sw, hipY + 2 + sw); ctx.stroke();
+    ctx.save(); ctx.translate(-5 + lx, shY + 6); ctx.rotate(-0.9);
+    ctx.fillStyle = '#6a3a1e'; ctx.fillRect(-1.8, -9, 3.6, 16); ctx.strokeStyle = INK; ctx.lineWidth = 0.9; ctx.strokeRect(-1.8, -9, 3.6, 16);
+    ctx.fillStyle = pal.trim || '#d8ac40'; ctx.fillRect(-2.2, -10, 4.4, 2); ctx.fillRect(-2.2, 6, 4.4, 2);
+    ctx.restore();
+  }
+}
+function gearBody(ctx, gear, pal, G) {
+  const { shY, hipY, lx, hw, t } = G;
+  if (gear === 'assassin') { // a dark strap across the chest with a tanto on it, and a crimson cord
+    ctx.strokeStyle = '#0e0c10'; ctx.lineWidth = 2.2; ctx.beginPath(); ctx.moveTo(-5 + lx, shY + 1.5); ctx.lineTo(hw + lx * 0.3, hipY - 1); ctx.stroke();
+    ctx.strokeStyle = pal.accent; ctx.lineWidth = 0.8; ctx.beginPath(); ctx.moveTo(-5 + lx, shY + 2.5); ctx.lineTo(hw + lx * 0.3, hipY); ctx.stroke();
+    ctx.save(); ctx.translate(-1 + lx * 0.7, shY + 7); ctx.rotate(0.95);
+    ctx.fillStyle = '#18161a'; ctx.fillRect(-1.2, -4.5, 2.4, 6); ctx.fillStyle = '#cfd6de'; ctx.fillRect(-0.7, 1.5, 1.4, 3.5); ctx.fillStyle = pal.accent; ctx.fillRect(-1.5, 1, 3, 0.9);
+    ctx.restore();
+  } else if (gear === 'tactician') { // gold trim on the collar, a gold tassel from the sash
+    ctx.strokeStyle = pal.trim || '#d8ac40'; ctx.lineWidth = 1.1;
+    ctx.beginPath(); ctx.moveTo(-3 + lx, shY); ctx.lineTo(1 + lx * 0.6, shY + 7); ctx.lineTo(4 + lx, shY); ctx.stroke();
+    const sw = Math.sin(t * 7) * 0.8;
+    ctx.beginPath(); ctx.moveTo(hw - 1, hipY + 1.5); ctx.lineTo(hw + sw, hipY + 7); ctx.stroke();
+    ctx.fillStyle = pal.trim || '#d8ac40'; ctx.beginPath(); ctx.ellipse(hw + sw, hipY + 8, 1.2, 2, 0, 0, TAU); ctx.fill();
+  } else if (gear === 'martial') { // the black belt knotted at the front, its two ends hanging
+    const sw = Math.sin(t * 8) * 0.7;
+    ctx.strokeStyle = pal.sash; ctx.lineWidth = 1.8; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(2, hipY + 1); ctx.lineTo(1 + sw, hipY + 7); ctx.moveTo(3, hipY + 1); ctx.lineTo(5 + sw, hipY + 6.5); ctx.stroke();
+    ctx.fillStyle = pal.sash; ctx.beginPath(); ctx.arc(2.5, hipY + 0.8, 1.6, 0, TAU); ctx.fill();
+    ctx.lineCap = 'butt';
+  } else if (gear === 'satanist') { // an oni mask hung at the hip from a crimson cord
+    ctx.strokeStyle = pal.accent; ctx.lineWidth = 0.9; ctx.beginPath(); ctx.moveTo(hw - 1, hipY); ctx.lineTo(hw + 1, hipY + 3); ctx.stroke();
+    ctx.save(); ctx.translate(hw + 1.5, hipY + 6);
+    ctx.fillStyle = pal.oni || '#b3202a'; ctx.beginPath(); ctx.ellipse(0, 0, 3.4, 3.8, 0, 0, TAU); ctx.fill(); ctx.strokeStyle = INK; ctx.lineWidth = 0.8; ctx.stroke();
+    ctx.fillStyle = pal.horn || '#e8dcc8'; ctx.beginPath(); ctx.moveTo(-2.6, -2.4); ctx.lineTo(-3.6, -5.2); ctx.lineTo(-1.4, -3.2); ctx.closePath(); ctx.moveTo(2.6, -2.4); ctx.lineTo(3.6, -5.2); ctx.lineTo(1.4, -3.2); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#ffd040'; ctx.fillRect(-2, -1, 1.4, 1); ctx.fillRect(0.6, -1, 1.4, 1);
+    ctx.fillStyle = '#1a0a0a'; ctx.fillRect(-1.8, 1.4, 3.6, 1.1);
+    ctx.restore();
+  } else if (gear === 'monk') { // a saffron kesa over one shoulder, and prayer beads round the neck
+    ctx.beginPath(); ctx.moveTo(-4 + lx, shY - 0.5); ctx.lineTo(1 + lx, shY - 0.5); ctx.lineTo(hw + 0.5, hipY - 1); ctx.lineTo(hw - 4.5, hipY + 1.5); ctx.closePath();
+    ctx.fillStyle = pal.kesa || '#d0882a'; ctx.fill(); ctx.strokeStyle = INK; ctx.lineWidth = 1; ctx.stroke();
+    ctx.strokeStyle = 'rgba(90,50,10,0.55)'; ctx.lineWidth = 0.6; // patchwork seams
+    for (let k = 1; k < 4; k++) {
+      const f = k / 4;
+      ctx.beginPath(); ctx.moveTo(-4 + lx + (hw - 0.5 - lx) * f, shY - 0.5 + (hipY + 1.5 - shY) * f); ctx.lineTo(1 + lx + (hw + 0.5 - 1 - lx) * f, shY - 0.5 + (hipY - 1 - shY) * f); ctx.stroke();
+    }
+    for (let k = 0; k <= 8; k++) { const a = Math.PI * (0.12 + k * 0.095); ctx.fillStyle = k === 4 ? '#e8d8a0' : (pal.beads || '#6a2a1a'); ctx.beginPath(); ctx.arc(1 + lx + Math.cos(a) * 4.6, shY + 0.5 + Math.sin(a) * 4.2, k === 4 ? 1.3 : 0.95, 0, TAU); ctx.fill(); }
+  }
+}
+function gearHead(ctx, gear, pal, hx, hy, G) {
+  const { t, back, mv } = G;
+  if (gear === 'assassin' && !back) { // the mask comes up over the nose: only a thin slit for the eyes, a red glint
+    ctx.fillStyle = pal.hood; ctx.beginPath(); ctx.ellipse(hx + 2.6, hy + 0.4, 4.4, 1.2, 0, 0, TAU); ctx.fill();
+    ctx.fillStyle = 'rgba(255,60,60,0.9)'; ctx.fillRect(hx + 3.6, hy - 1.5, 1, 0.8);
+  } else if (gear === 'martial') { // a red hachimaki round the hood, its ends streaming behind
+    const fl = Math.sin(t * 11) * 1.4 * (0.5 + mv);
+    ctx.fillStyle = pal.scarf; ctx.fillRect(hx - 6.1, hy - 3.6, 12.2, 1.9);
+    ctx.beginPath(); ctx.moveTo(hx - 5.5, hy - 3.2); ctx.lineTo(hx - 12, hy - 4 + fl); ctx.lineTo(hx - 11.5, hy - 2.2 + fl); ctx.lineTo(hx - 5.5, hy - 1.8); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(hx - 5.5, hy - 2.8); ctx.lineTo(hx - 10, hy + 0.5 + fl * 0.7); ctx.lineTo(hx - 9, hy + 1.6 + fl * 0.7); ctx.closePath(); ctx.fill();
+    if (!back) { ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(hx + 2.5, hy - 2.7, 0.7, 0, TAU); ctx.fill(); }
+  } else if (gear === 'feather') { // one long feather tucked into the hood
+    ctx.save(); ctx.translate(hx - 3, hy - 4.5); ctx.rotate(-2.3 + Math.sin(t * 6) * 0.06);
+    ctx.fillStyle = pal.feather || '#f1f4ef'; ctx.beginPath(); ctx.moveTo(0, 0); ctx.quadraticCurveTo(5.5, -2.4, 11, 0); ctx.quadraticCurveTo(5.5, 2.4, 0, 0); ctx.fill();
+    ctx.strokeStyle = INK; ctx.lineWidth = 0.8; ctx.stroke(); ctx.restore();
+  } else if (gear === 'satanist') { // two small horns through the hood, and red eyes
+    for (const [ox, lean] of [[-2.8, -0.35], [2.6, 0.25]]) {
+      ctx.save(); ctx.translate(hx + ox, hy - 5.2); ctx.rotate(lean);
+      ctx.fillStyle = pal.horn || '#e8dcc8'; ctx.beginPath(); ctx.moveTo(-1.6, 0.6); ctx.quadraticCurveTo(-1.2, -3.4, 0.8, -5.2); ctx.quadraticCurveTo(0.4, -2.4, 1.6, 0.6); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = INK; ctx.lineWidth = 0.7; ctx.stroke(); ctx.restore();
+    }
+    if (!back) { ctx.fillStyle = '#ff3030'; ctx.fillRect(hx + 3.4, hy - 1.6, 1.6, 1.6); ctx.fillRect(hx + 0.9, hy - 1.5, 1.2, 1.4); }
+  } else if (gear === 'tactician' && !back) { // a small gold crest on the brow
+    ctx.fillStyle = pal.trim || '#d8ac40'; ctx.beginPath(); ctx.arc(hx + 1.2, hy - 4, 1.4, 0, TAU); ctx.fill(); ctx.strokeStyle = INK; ctx.lineWidth = 0.6; ctx.stroke();
+  }
 }
 
 // ---------------- Kappa ----------------
@@ -1093,6 +1420,19 @@ export function drawProjectile(ctx, p, sx, sy, t) {
       ctx.fillStyle = p.golden ? '#ffd060' : '#9aa3ad'; ctx.beginPath(); ctx.moveTo(-6, 0); ctx.lineTo(0, -2.5); ctx.lineTo(8, 0); ctx.lineTo(0, 2.5); ctx.closePath(); ctx.fill();
       ctx.strokeStyle = INK; ctx.lineWidth = 1; ctx.stroke();
       break;
+    case 'rock': case 'rockshard': { // the gloves' rock (and its shards): a tumbling dark-brown stone
+      const R = p.kind === 'rock' ? 10 : 5.5;
+      ctx.rotate(t * 9 - ang);
+      ctx.beginPath(); for (let k = 0; k < 7; k++) { const a = (k / 7) * TAU, rr = R * (0.78 + 0.22 * ((k * 3) % 4) / 3); k ? ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr) : ctx.moveTo(Math.cos(a) * rr, Math.sin(a) * rr); } ctx.closePath();
+      ctx.fillStyle = '#5a3a22'; ctx.fill(); ctx.strokeStyle = INK; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.fillStyle = 'rgba(150,110,70,0.7)'; ctx.beginPath(); ctx.moveTo(-R * 0.5, -R * 0.4); ctx.lineTo(R * 0.2, -R * 0.6); ctx.lineTo(0, 0); ctx.closePath(); ctx.fill();
+      break;
+    }
+    case 'bullet': // a rifle ball: a bright hot streak and a small dark lead ball
+      ctx.strokeStyle = 'rgba(255,230,170,0.55)'; ctx.lineWidth = 2.4; ctx.beginPath(); ctx.moveTo(-34, 0); ctx.lineTo(0, 0); ctx.stroke();
+      ctx.strokeStyle = 'rgba(255,255,240,0.9)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(-16, 0); ctx.lineTo(0, 0); ctx.stroke();
+      ctx.fillStyle = '#2a2a2e'; ctx.beginPath(); ctx.arc(1, 0, 2.2, 0, TAU); ctx.fill();
+      break;
     case 'arrow':
       ctx.strokeStyle = '#5a3a1e'; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.moveTo(-14, 0); ctx.lineTo(6, 0); ctx.stroke();
       ctx.fillStyle = '#ddd'; ctx.beginPath(); ctx.moveTo(6, -2); ctx.lineTo(11, 0); ctx.lineTo(6, 2); ctx.fill();
@@ -1112,6 +1452,20 @@ export function drawProjectile(ctx, p, sx, sy, t) {
       blob(ctx, 0, 0, 4.6, p.kind === 'jug' ? '#d8c8a0' : '#8a4a2a');
       if (p.kind === 'firejar') { ctx.fillStyle = Math.random() > 0.5 ? '#ffd35a' : '#ff6a2a'; ctx.beginPath(); ctx.arc(0, -5, 2.4, 0, TAU); ctx.fill(); }
       else { ctx.fillStyle = '#2a2030'; ctx.fillRect(-1.5, -6, 3, 2); }
+      break;
+    }
+    case 'lightmote': { // the holy staff's light: a small warm star with a soft halo and a cross of rays
+      ctx.rotate(-ang);
+      ctx.save(); ctx.globalCompositeOperation = 'lighter';
+      const pulse = 1 + Math.sin(t * 14 + (p.seed || 0)) * 0.15;
+      const gl = ctx.createRadialGradient(0, 0, 0, 0, 0, 13 * pulse);
+      gl.addColorStop(0, 'rgba(255,250,225,0.95)'); gl.addColorStop(0.35, 'rgba(255,225,140,0.55)'); gl.addColorStop(1, 'rgba(255,200,90,0)');
+      ctx.fillStyle = gl; ctx.beginPath(); ctx.arc(0, 0, 13 * pulse, 0, TAU); ctx.fill();
+      ctx.rotate(t * 2 + (p.seed || 0));
+      ctx.fillStyle = 'rgba(255,248,220,0.8)';
+      for (let i = 0; i < 4; i++) { ctx.rotate(Math.PI / 2); ctx.beginPath(); ctx.moveTo(0, -1.2); ctx.lineTo(9 * pulse, 0); ctx.lineTo(0, 1.2); ctx.closePath(); ctx.fill(); }
+      ctx.restore();
+      ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(0, 0, 2.6, 0, TAU); ctx.fill();
       break;
     }
     case 'ofuda': { // the monk's paper talisman, wrapped in a pale golden flame
@@ -1135,6 +1489,20 @@ export function drawProjectile(ctx, p, sx, sy, t) {
       ctx.fillStyle = c[0]; ctx.beginPath(); ctx.arc(0, 0, 12 * pulse, 0, TAU); ctx.fill();
       ctx.fillStyle = c[1]; ctx.beginPath(); ctx.arc(0, 0, 6 * pulse, 0, TAU); ctx.fill();
       ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(0, 0, 3, 0, TAU); ctx.fill();
+      break;
+    }
+    case 'wisp': { // the spirit orb's wisp: a small pale ghost, its tail streaming behind it, two dark eyes
+      ctx.save(); ctx.globalCompositeOperation = 'lighter';
+      const gl = ctx.createRadialGradient(0, 0, 0, 0, 0, 18);
+      gl.addColorStop(0, 'rgba(150,210,255,0.45)'); gl.addColorStop(1, 'rgba(150,210,255,0)');
+      ctx.fillStyle = gl; ctx.beginPath(); ctx.arc(0, 0, 18, 0, TAU); ctx.fill();
+      ctx.restore();
+      const wv = Math.sin(t * 14 + (p.seed || 0));
+      ctx.fillStyle = 'rgba(200,232,255,0.8)';
+      ctx.beginPath(); ctx.moveTo(4, -6); ctx.quadraticCurveTo(-8, -6 + wv * 2, -22, wv * 4); ctx.quadraticCurveTo(-8, 6 + wv * 2, 4, 6); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = 'rgba(240,250,255,0.95)'; ctx.beginPath(); ctx.arc(3, 0, 6.5, 0, TAU); ctx.fill();
+      ctx.rotate(-ang); // eyes stay upright
+      ctx.fillStyle = 'rgba(30,50,90,0.85)'; ctx.beginPath(); ctx.ellipse(1, -1, 1, 1.6, 0, 0, TAU); ctx.ellipse(4.5, -1, 1, 1.6, 0, 0, TAU); ctx.fill();
       break;
     }
     case 'crescent': { // Gensai's spinning crescent blade (ang = spin)

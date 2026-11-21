@@ -1,0 +1,32 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>sim</title></head>
+<body>
+<!-- Headless combat sim page. ?suite=NAME&shard=I&of=N runs every N-th job of the suite from I and writes the
+     results as JSON into #out (read by tools/sim/run.mjs through Chrome's --dump-dom). -->
+<canvas id="game" width="640" height="360"></canvas>
+<pre id="out"></pre>
+<script type="module">
+const q = new URLSearchParams(location.search);
+const out = document.getElementById('out');
+try {
+  const { input } = await import('../../src/input.js');
+  const { Game } = await import('../../src/game.js');
+  const { runSim } = await import('./harness.js');
+  const { buildSuite } = await import('./suites.js');
+  const canvas = document.getElementById('game');
+  input.init(canvas);
+  const g = new Game(canvas);
+  g.render = () => {}; // never drawn
+  const shard = +(q.get('shard') || 0), of = +(q.get('of') || 1);
+  const jobs = buildSuite(q.get('suite') || 'smoke').filter((j) => j.id % of === shard);
+  const res = [];
+  const t0 = performance.now();
+  for (const job of jobs) {
+    try { res.push({ ...job, res: runSim(g, job) }); }
+    catch (e) { res.push({ ...job, err: String(e && e.stack || e) }); }
+  }
+  out.textContent = 'SIMJSON' + JSON.stringify({ shard, of, ms: performance.now() - t0, results: res }) + 'SIMEND';
+} catch (e) { out.textContent = 'SIMJSON' + JSON.stringify({ fatal: String(e && e.stack || e) }) + 'SIMEND'; }
+document.title = 'done';
+</script>
+</body></html>

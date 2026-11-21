@@ -248,3 +248,30 @@ export function drawDummy(ctx, o) {
   ctx.fillStyle = '#e8e2d2'; ctx.fillRect(-8.5, -66, 17, 3); ctx.fillStyle = '#b52a22'; ctx.beginPath(); ctx.arc(0, -64.5, 1.6, 0, TAU); ctx.fill();
   ctx.restore();
 }
+
+// ---------------- Kaze Tsubame: a wind-swallow yokai (area 2). Midnight-blue back, white belly, a red throat,
+// long swept wings and a deep forked tail; it folds its wings back to dive (wind-up) and streaks through (dash).
+export function drawSwallow(ctx, o) {
+  const t = o.time, e = o.e || {}, dive = e.state === 'swoop', wind = e.state === 'windup';
+  const dir = begin(ctx, o, 1.05, 10);
+  const back = F(o, '#1e2a50'), belly = F(o, '#f2efe6'), throat = F(o, '#c8382e');
+  const flap = dive || wind ? 0 : Math.sin(t * 16);
+  ctx.translate(0, -26);
+  if (dive) { ctx.globalAlpha *= 0.5; ctx.strokeStyle = 'rgba(220,235,255,0.8)'; ctx.lineWidth = 1.4; for (const y of [-4, 2, 7]) { ctx.beginPath(); ctx.moveTo(-34, y); ctx.lineTo(-14, y); ctx.stroke(); } ctx.globalAlpha /= 0.5; }
+  // far wing, tail, body, near wing
+  const wing = (side, lift) => {
+    const tipX = wind || dive ? -22 : -4, tipY = wind || dive ? -6 * side : -22 * lift * side;
+    ctx.beginPath(); ctx.moveTo(2, 0); ctx.quadraticCurveTo(-4, tipY * 0.6 - 4 * side, tipX, tipY); ctx.quadraticCurveTo(-8, tipY * 0.3, -6, 2 * side); ctx.closePath();
+    ctx.fillStyle = back; ctx.fill(); ctx.strokeStyle = INK; ctx.lineWidth = 1.4; ctx.stroke();
+  };
+  wing(-1, 0.6 + flap * 0.5);
+  ctx.beginPath(); ctx.moveTo(-8, 1); ctx.lineTo(-22, -4); ctx.lineTo(-15, 2); ctx.lineTo(-22, 8); ctx.closePath(); // the forked tail
+  ctx.fillStyle = back; ctx.fill(); ctx.strokeStyle = INK; ctx.lineWidth = 1.3; ctx.stroke();
+  ctx.beginPath(); ctx.ellipse(0, 1, 11, 5.2, 0, 0, TAU); ctx.fillStyle = back; ctx.fill(); ctx.strokeStyle = INK; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.beginPath(); ctx.ellipse(1, 3, 8, 2.6, 0, 0, Math.PI); ctx.fillStyle = belly; ctx.fill();
+  ctx.beginPath(); ctx.arc(9, 0, 3.4, 0, TAU); ctx.fillStyle = throat; ctx.fill(); ctx.strokeStyle = INK; ctx.lineWidth = 1.2; ctx.stroke(); // head and red throat
+  ctx.beginPath(); ctx.moveTo(12, -0.5); ctx.lineTo(16, 0.5); ctx.lineTo(12, 1.5); ctx.closePath(); ctx.fillStyle = '#2a2420'; ctx.fill(); // beak
+  ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(10, -1, 0.9, 0, TAU); ctx.fill();
+  wing(1, 0.6 - flap * 0.5);
+  ctx.restore();
+}

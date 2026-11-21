@@ -1,0 +1,280 @@
+<title>Balance Lab</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@700;800&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap">
+<style>
+/* Layout: one reading column of stacked instrument panels, wide tables scroll inside their own frame. */
+:root {
+  --bg: #ece8de; --panel: #f7f4ec; --ink: #1c1a21; --muted: #676170; --line: #d6cfc1;
+  --accent: #2b4a8c; --accent-soft: rgba(43, 74, 140, 0.12);
+  --hot: #b8322b; --warn: #b9781c; --cool: #2f6fa8; --ok: #3d7a3a;
+  --heat-lo: 247, 244, 236; --heat-hi: 43, 74, 140;
+  --font-display: "Shippori Mincho", "Yu Mincho", Georgia, serif;
+  --font-body: "Zen Kaku Gothic New", "Hiragino Sans", "Segoe UI", system-ui, sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #141219; --panel: #1c1922; --ink: #ebe5d8; --muted: #9b94a3; --line: #2f2b38;
+  --accent: #93b0f2; --accent-soft: rgba(147, 176, 242, 0.14);
+  --hot: #f0766c; --warn: #e3aa52; --cool: #79b2e6; --ok: #86c47f;
+  --heat-lo: 28, 25, 34; --heat-hi: 120, 156, 236; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #141219; --panel: #1c1922; --ink: #ebe5d8; --muted: #9b94a3; --line: #2f2b38;
+  --accent: #93b0f2; --accent-soft: rgba(147, 176, 242, 0.14);
+  --hot: #f0766c; --warn: #e3aa52; --cool: #79b2e6; --ok: #86c47f;
+  --heat-lo: 28, 25, 34; --heat-hi: 120, 156, 236; color-scheme: dark; }
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.6 var(--font-body); margin: 0; }
+.wrap { max-width: 1120px; margin: 0 auto; padding-block: 36px 64px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 28px; }
+header { display: grid; gap: 6px; }
+.eyebrow { font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); font-weight: 700; }
+h1 { font: 800 clamp(30px, 5vw, 44px)/1.1 var(--font-display); margin: 0; text-wrap: balance; }
+h1 .jp { color: var(--accent); margin-right: 12px; }
+h2 { font: 800 22px/1.25 var(--font-display); margin: 0; text-wrap: balance; }
+.lede { max-width: 68ch; color: var(--muted); margin: 4px 0 0; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 20px; display: grid; gap: 14px; min-width: 0; }
+.phead { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: baseline; justify-content: space-between; }
+.phead p { margin: 0; color: var(--muted); max-width: 70ch; font-size: 14px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; flex-wrap: wrap; }
+.seg button { font: 700 13px var(--font-body); background: transparent; color: var(--muted); border: 0; padding: 6px 12px; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--panel); }
+.seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.controls { display: flex; flex-wrap: wrap; gap: 10px; }
+.scroll { overflow-x: auto; min-width: 0; }
+table { border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 13px; width: 100%; }
+th, td { padding: 6px 8px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--line); }
+th { font-weight: 700; color: var(--muted); font-size: 12px; }
+th:first-child, td:first-child { text-align: left; position: sticky; left: 0; background: var(--panel); z-index: 1; }
+td.cell { border-left: 1px solid var(--panel); }
+.tag { display: inline-block; font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 0 5px; border-radius: 3px; margin-left: 6px; border: 1px solid currentColor; }
+.tag.heavy { color: var(--warn); } .tag.shield { color: var(--cool); }
+.sub { color: var(--muted); font-size: 12px; margin-left: 6px; }
+.flags { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.flags li { display: grid; grid-template-columns: 112px 1fr; gap: 12px; align-items: baseline; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.flags li:last-child { border-bottom: 0; }
+.sev { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+.sev.high { color: var(--hot); } .sev.warn { color: var(--warn); } .sev.low { color: var(--cool); } .sev.info { color: var(--muted); }
+.sev small { display: block; color: var(--muted); letter-spacing: 0.04em; font-weight: 500; text-transform: none; font-size: 12px; }
+svg text { fill: var(--ink); font-family: var(--font-body); }
+svg .axis { stroke: var(--line); }
+svg .muted { fill: var(--muted); }
+.legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 12px; color: var(--muted); }
+.legend i { display: inline-block; vertical-align: middle; margin-right: 6px; }
+.notes { margin: 0; padding-left: 18px; display: grid; gap: 6px; color: var(--ink); max-width: 80ch; }
+.notes li::marker { color: var(--accent); }
+.none { color: var(--muted); }
+.vision { display: grid; gap: 0; }
+.vrow { display: grid; grid-template-columns: 180px 1fr; gap: 6px 20px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+.vrow:last-child { border-bottom: 0; }
+.vrow h3 { font: 800 16px/1.3 var(--font-display); margin: 0 0 6px; }
+.pill { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; padding: 2px 8px; border-radius: 999px; border: 1px solid currentColor; }
+.pill.on { color: var(--ok); } .pill.near { color: var(--warn); } .pill.off { color: var(--hot); }
+.claim { margin: 0 0 6px; font-weight: 700; }
+.vrow ul { margin: 0; padding-left: 18px; display: grid; gap: 2px; font-size: 14px; }
+.vrow .want { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
+@media (max-width: 560px) { .vrow { grid-template-columns: 1fr; } }
+.strong { outline: 2px solid var(--hot); outline-offset: -2px; }
+@media (max-width: 560px) { .flags li { grid-template-columns: 1fr; gap: 2px; } .panel { padding: 14px; } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Kage no Michi · combat simulator</div>
+    <h1><span class="jp">稽古</span>Balance Lab</h1>
+    <p class="lede" id="lede"></p>
+  </header>
+
+  <section class="panel" aria-labelledby="h-vision">
+    <div class="phead"><h2 id="h-vision">Vision check</h2><p>Each weapon and card type against what it is meant to be. Every claim has its own test; the target under each line is the bar it has to clear.</p></div>
+    <div class="vision" id="vision"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="h-flags">
+    <div class="phead"><h2 id="h-flags">What stands out</h2><p>Found automatically from the numbers below. Thresholds are rough; treat these as places to look.</p></div>
+    <ul class="flags" id="flags"></ul>
+  </section>
+
+  <section class="panel" aria-labelledby="h-dps">
+    <div class="phead"><h2 id="h-dps">Weapon damage per second</h2>
+      <p>Each weapon alone on training dummies. The bar spans the 10th to 90th percentile across 12 playstyles; the dot is the median, the ring is the median using basic attacks only.</p></div>
+    <div class="controls"><div class="seg" id="dps-target" role="group" aria-label="Targets"></div></div>
+    <div class="scroll"><svg id="dps" role="img" aria-label="Damage per second by weapon"></svg></div>
+    <div class="legend"><span><i style="width:18px;height:8px;background:var(--accent-soft);border:1px solid var(--accent)"></i>10th to 90th percentile</span><span><i style="width:9px;height:9px;border-radius:50%;background:var(--accent)"></i>median, specials used</span><span><i style="width:9px;height:9px;border-radius:50%;border:2px solid var(--muted)"></i>median, basic attacks only</span></div>
+  </section>
+
+  <section class="panel" aria-labelledby="h-style">
+    <div class="phead"><h2 id="h-style">How playstyle changes it</h2>
+      <p>Single-target DPS. Uptime is the share of time spent attacking (the rest is dodging, ending in a dash). Sloppy aim drifts up to ±14°. Close puts ranged weapons at 3 tiles. Shading is per row.</p></div>
+    <div class="scroll"><table id="style"></table></div>
+  </section>
+
+  <section class="panel" aria-labelledby="h-ttk">
+    <div class="phead"><h2 id="h-ttk">Time to kill each enemy</h2>
+      <p>Seconds to kill one enemy at a time with real health, shields and dodges; it never fights back. Measured at a typical level for the room.</p></div>
+    <div class="controls"><div class="seg" id="ttk-room" role="group" aria-label="Room"></div><div class="seg" id="ttk-style" role="group" aria-label="Playstyle"></div></div>
+    <div class="scroll"><table id="ttk"></table></div>
+    <div class="legend"><span><i style="width:42px;height:10px;background:linear-gradient(90deg,var(--ok),var(--warn),var(--hot))"></i>1 s → 40 s (log scale)</span><span>— not killed within 40 s</span></div>
+  </section>
+
+  <section class="panel" aria-labelledby="h-pairs">
+    <div class="phead"><h2 id="h-pairs">Weapons against mixed groups</h2>
+      <p>Kills per minute with one weapon (one per run) against four of the area's regular enemies, which are replaced as they fall.</p></div>
+    <div class="controls"><div class="seg" id="pair-style" role="group" aria-label="Playstyle"></div></div>
+    <div class="scroll"><table id="pairs"></table></div>
+  </section>
+
+  <section class="panel" aria-labelledby="h-cards">
+    <div class="phead"><h2 id="h-cards">What one card adds</h2>
+      <p>Extra damage from one stat card or imbuement compared with the same weapon without it, for a typical player. Cells outlined in red add more than twice a legendary Attack Damage card.</p></div>
+    <div class="controls"><div class="seg" id="card-target" role="group" aria-label="Targets"></div></div>
+    <div class="scroll"><table id="cards"></table></div>
+  </section>
+
+  <section class="panel" aria-labelledby="h-arts">
+    <div class="phead"><h2 id="h-arts">Weapon techniques</h2>
+      <p>Extra damage from each technique on its own weapon. Techniques that need kills, hits taken or reflected shots cannot show their value on a dummy and read about 0%.</p></div>
+    <div class="controls"><div class="seg" id="art-weapon" role="group" aria-label="Weapon"></div></div>
+    <div class="scroll"><table id="arts"></table></div>
+  </section>
+
+  <section class="panel" aria-labelledby="h-method">
+    <div class="phead"><h2 id="h-method">How this was measured</h2></div>
+    <ul class="notes">
+      <li>Every fight runs the game's own code in headless Chrome (weapons, techniques, imbuements, cards, crits, enemy health scaling, shields), 60 steps a second with no drawing. Each fight is 40 seconds.</li>
+      <li>The player is scripted, not an AI. It plays to a style: how much of the time it attacks, how close it stands, how well it aims, and whether it uses specials. The spread across styles shows how much a weapon depends on how it is played.</li>
+      <li>Enemies never attack and always face you. So the sim does not see defensive value: the Shishi Shield's reflects and Bulwark, healing, dodging, spirits taking hits. Shield-bearers are harder than in real play, because nobody walks around the shield.</li>
+      <li>One weapon per run. Spirits from the Restless Spirit Orb take a constant low chip damage (3 per second at area-1 strength, scaled with enemy damage per level and by the share a spirit really takes), standing in for enemy hits: a spirit of a strong enemy lasts longer. Thrown katanas are picked up again before the next throw (walking around obstacles). Hit-freeze and slow motion are off, since they pause the whole game. Every card is tested over 6 runs.</li>
+      <li>Re-run with <code>node tools/sim/run.mjs all</code> and rebuild this page with <code>node tools/sim/report.mjs</code>.</li>
+    </ul>
+  </section>
+</div>
+
+<script>
+const D = /*__DATA__*/null;
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const ROOM_NAMES = { area1: 'Area 1', area2: 'Area 2', area3: 'Area 3', area4: 'Area 4', dojo: 'Training hall', library: 'Library' };
+const STATE = { dpsT: 'one', room: 'area1', ttkS: 'typical', pairS: 'typical', cardT: 'one', artW: D.order[0] };
+try { const s = JSON.parse(localStorage.getItem('balance-lab') || '{}'); Object.assign(STATE, s); } catch (e) { /* storage off */ }
+const save = () => { try { localStorage.setItem('balance-lab', JSON.stringify(STATE)); } catch (e) { /* storage off */ } };
+function seg(el, opts, key, render) {
+  el.innerHTML = opts.map(([v, l]) => `<button type="button" data-v="${v}" aria-pressed="${STATE[key] === v}">${esc(l)}</button>`).join('');
+  el.onclick = (e) => { const b = e.target.closest('button'); if (!b) return; STATE[key] = b.dataset.v; save(); el.querySelectorAll('button').forEach((x) => x.setAttribute('aria-pressed', x === b)); render(); };
+}
+const heat = (k) => { const lo = css('--heat-lo').split(',').map(Number), hi = css('--heat-hi').split(',').map(Number); const t = Math.max(0, Math.min(1, k)); const c = lo.map((a, i) => Math.round(a + (hi[i] - a) * t)); return `rgb(${c.join(',')})`; };
+const inkOn = (k) => (k > 0.55 ? css('--panel') : css('--ink'));
+function ttkColor(s) { // 1 s green .. 40 s red, log scale, mixed with the panel colour
+  const k = Math.max(0, Math.min(1, Math.log(Math.max(1, s)) / Math.log(40)));
+  const mix = (a, b, t) => a.map((x, i) => Math.round(x + (b[i] - x) * t));
+  const hex = (h) => { const c = document.createElement('canvas').getContext('2d'); c.fillStyle = h; const v = c.fillStyle; return [1, 3, 5].map((i) => parseInt(v.slice(i, i + 2), 16)); };
+  const [g, y, r] = [hex(css('--ok')), hex(css('--warn')), hex(css('--hot'))];
+  const c = k < 0.5 ? mix(g, y, k * 2) : mix(y, r, (k - 0.5) * 2);
+  return `rgba(${c.join(',')},${0.28 + 0.5 * k})`;
+}
+
+// header + flags
+const total = Object.values(D.counts).reduce((a, b) => a + b, 0);
+$('lede').textContent = `${total.toLocaleString('en')} simulated fights on the current game code (${D.counts.weapons} weapon tests, ${D.counts.enemies} enemy duels, ${D.counts.pairs} mixed-group runs, ${D.counts.cards} card tests, ${D.counts.vision || 0} vision tests). Generated ${new Date(D.at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })}.`;
+const VERDICT = { on: 'On target', near: 'Close', off: 'Off target' };
+$('vision').innerHTML = (D.vision || []).length ? D.vision.map((v) => `<div class="vrow"><div><h3>${esc(v.title)}</h3><span class="pill ${v.verdict}">${VERDICT[v.verdict]}</span></div><div><p class="claim">${esc(v.claim)}</p><ul>${v.evidence.map((e) => `<li>${esc(e)}</li>`).join('')}</ul><p class="want">Target: ${esc(v.want)}</p></div></div>`).join('') : '<p class="none">Run the vision suite to fill this in.</p>';
+const SEV = { high: 'Too strong', warn: 'Slow kill', low: 'Weak', info: 'Note' };
+$('flags').innerHTML = D.flags.length ? D.flags.map((f) => `<li><span class="sev ${f.sev}">${SEV[f.sev]}<small>${esc(f.area)}</small></span><span>${esc(f.text)}</span></li>`).join('') : '<li class="none">Nothing stands out.</li>';
+
+// weapon DPS range chart
+function drawDps() {
+  const t = STATE.dpsT, rows = D.weapons, max = Math.ceil(Math.max(...rows.map((w) => w[t].p90)) / 10) * 10;
+  const W = 900, L = 150, R = 30, rowH = 34, top = 26, H = top + rows.length * rowH + 10, x = (v) => L + (v / max) * (W - L - R);
+  let s = '';
+  for (let v = 0; v <= max; v += max > 60 ? 20 : 10) s += `<line class="axis" x1="${x(v)}" x2="${x(v)}" y1="${top - 6}" y2="${H - 6}"/><text class="muted" x="${x(v)}" y="${top - 12}" font-size="11" text-anchor="middle">${v}</text>`;
+  rows.forEach((w, i) => {
+    const y = top + i * rowH + rowH / 2, a = w[t], b = w[t === 'one' ? 'oneBasic' : 'grpBasic'];
+    s += `<text x="${L - 12}" y="${y + 4}" font-size="13" font-weight="700" text-anchor="end">${esc(w.name)}</text>`;
+    s += `<rect x="${x(a.p10)}" y="${y - 7}" width="${Math.max(2, x(a.p90) - x(a.p10))}" height="14" rx="2" fill="${css('--accent-soft')}" stroke="${css('--accent')}" stroke-width="1"/>`;
+    s += `<circle cx="${x(b.med)}" cy="${y}" r="5.5" fill="${css('--panel')}" stroke="${css('--muted')}" stroke-width="2"/>`;
+    s += `<circle cx="${x(a.med)}" cy="${y}" r="5" fill="${css('--accent')}"/>`;
+    s += `<text class="muted" x="${x(a.p90) + 8}" y="${y + 4}" font-size="11">${a.med}</text>`;
+  });
+  const svg = $('dps'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.style.width = '100%'; svg.style.minWidth = '560px'; svg.innerHTML = s;
+}
+seg($('dps-target'), [['one', 'One target'], ['grp', 'Group of four']], 'dpsT', drawDps);
+
+// playstyle table
+function drawStyle() {
+  const cols = [];
+  for (const up of [1, 0.7, 0.45]) for (const aim of [0, 14]) for (const close of [false, true]) cols.push({ tag: `up${up}-aim${aim}${close ? '-close' : ''}`, up, aim, close });
+  let h = '<thead><tr><th rowspan="2">Weapon</th>' + [1, 0.7, 0.45].map((u) => `<th colspan="4" style="text-align:center">${Math.round(u * 100)}% attacking</th>`).join('') + '</tr><tr>' + cols.map((c) => `<th>${c.aim ? 'sloppy' : 'sharp'}${c.close ? ', close' : ''}</th>`).join('') + '</tr></thead><tbody>';
+  for (const w of D.weapons) {
+    const vals = cols.map((c) => w.styles[c.tag]), mx = Math.max(...vals.filter((v) => v != null)), mn = Math.min(...vals.filter((v) => v != null));
+    h += `<tr><td>${esc(w.name)}</td>` + vals.map((v) => { if (v == null) return '<td class="cell none">—</td>'; const k = mx > mn ? (v - mn) / (mx - mn) : 0.5; return `<td class="cell" style="background:${heat(k * 0.85)};color:${inkOn(k * 0.85)}">${v.toFixed(1)}</td>`; }).join('') + '</tr>';
+  }
+  $('style').innerHTML = h + '</tbody>';
+}
+
+// time to kill
+function drawTtk() {
+  const R = D.rooms.find((r) => r.room === STATE.room) || D.rooms[0], T = D.ttk[STATE.ttkS] || {};
+  let h = `<thead><tr><th>Enemy <span class="sub">level ${D.levelOf[R.room]}</span></th><th>HP</th>` + D.order.map((w) => `<th>${esc(D.wname[w] || w)}</th>`).join('') + '</tr></thead><tbody>';
+  for (const en of R.enemies) {
+    h += `<tr><td>${esc(en.name)}${en.heavy ? '<span class="tag heavy">heavy</span>' : ''}${en.shield ? '<span class="tag shield">shield</span>' : ''}</td><td>${en.hp}</td>`;
+    h += D.order.map((w) => { const v = (T[w] || {})[en.type]; return v == null ? `<td class="cell" style="background:${ttkColor(40)}">—</td>` : `<td class="cell" style="background:${ttkColor(v)}">${v.toFixed(1)}</td>`; }).join('') + '</tr>';
+  }
+  $('ttk').innerHTML = h + '</tbody>';
+}
+seg($('ttk-room'), D.rooms.map((r) => [r.room, ROOM_NAMES[r.room] || r.room]), 'room', drawTtk);
+seg($('ttk-style'), [['typical', 'Typical player'], ['sloppy', 'Sloppy player']], 'ttkS', drawTtk);
+
+// pairs
+function drawPairs() {
+  const P = D.pairs[STATE.pairS] || {}, areas = ['area1', 'area2', 'area3', 'area4'];
+  const rows = Object.entries(P).map(([p, v]) => ({ p, v, avg: areas.reduce((a, k) => a + (v[k] || 0), 0) / areas.length })).sort((a, b) => b.avg - a.avg);
+  const mx = Math.max(...rows.map((r) => r.avg));
+  let h = '<thead><tr><th>Weapon</th>' + areas.map((a) => `<th>${ROOM_NAMES[a]}</th>`).join('') + '<th>Average</th></tr></thead><tbody>';
+  for (const r of rows) {
+    const name = r.p.split('+').map((k) => D.wname[k] || k).join(' + ');
+    h += `<tr><td>${esc(name)}</td>` + areas.map((a) => `<td class="cell">${(r.v[a] ?? 0).toFixed(1)}</td>`).join('') + `<td class="cell" style="background:${heat((r.avg / mx) * 0.85)};color:${inkOn((r.avg / mx) * 0.85)};font-weight:700">${r.avg.toFixed(1)}</td></tr>`;
+  }
+  $('pairs').innerHTML = h + '</tbody>';
+}
+seg($('pair-style'), [['typical', 'Typical player'], ['sloppy', 'Sloppy player']], 'pairS', drawPairs);
+
+// cards (stats + imbuements)
+const legDmg = (() => { const c = D.cards.find((x) => x.key === 'stat:baseDamage:3'); if (!c) return 25; const v = Object.values(c.gains).map((g) => g.one).sort((a, b) => a - b); return v[v.length >> 1]; })();
+function gainCell(v) {
+  if (v == null) return '<td class="cell none">—</td>';
+  const k = Math.max(0, Math.min(1, v / 100)), neg = v < -3;
+  const bg = neg ? `rgba(184,50,43,${Math.min(0.35, -v / 60)})` : heat(k * 0.9);
+  return `<td class="cell${v > legDmg * 2.2 && v > 50 ? ' strong' : ''}" style="background:${bg};color:${neg ? css('--ink') : inkOn(k * 0.9)}">${v > 0 ? '+' : ''}${v}%</td>`;
+}
+function drawCards() {
+  const t = STATE.cardT, rows = D.cards.filter((c) => c.kind !== 'art').sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'stat' ? -1 : 1) || a.label.localeCompare(b.label) || a.rarity - b.rarity);
+  let h = '<thead><tr><th>Card</th>' + D.order.map((w) => `<th>${esc(D.wname[w] || w)}</th>`).join('') + '</tr></thead><tbody>';
+  let last = '';
+  for (const c of rows) {
+    const group = c.kind === 'stat' ? 'Stat cards' : 'Imbuements (on this weapon)';
+    if (group !== last) { h += `<tr><th colspan="${D.order.length + 1}" style="text-align:left;padding-top:14px">${group}</th></tr>`; last = group; }
+    h += `<tr><td>${esc(c.label)} <span class="sub">${esc(c.rarityName || '')}</span></td>` + D.order.map((w) => gainCell(c.gains[w] ? c.gains[w][t] : null)).join('') + '</tr>';
+  }
+  $('cards').innerHTML = h + '</tbody>';
+}
+seg($('card-target'), [['one', 'One target'], ['grp', 'Group of four']], 'cardT', drawCards);
+
+// techniques
+function drawArts() {
+  const rows = D.cards.filter((c) => c.kind === 'art' && c.weapon === STATE.artW);
+  const SLOT = { basic: 'Basic', special: 'Special', unique: 'Passive' };
+  let h = '<thead><tr><th>Technique</th><th style="text-align:left">Slot</th><th style="text-align:left">Effect</th><th>One target</th><th>Group of four</th></tr></thead><tbody>';
+  for (const c of rows) {
+    const g = c.gains[c.weapon] || {}, flat = Math.abs(g.one) <= 2 && Math.abs(g.grp) <= 2;
+    h += `<tr><td>${esc(c.label)}</td><td style="text-align:left">${SLOT[c.slot] || c.slot}</td><td style="text-align:left;white-space:normal;min-width:220px" class="${flat ? 'none' : ''}">${esc(c.text || '')}${flat ? ' · not measurable on a dummy' : ''}</td>${gainCell(g.one)}${gainCell(g.grp)}</tr>`;
+  }
+  $('arts').innerHTML = h + '</tbody>';
+}
+seg($('art-weapon'), D.order.map((w) => [w, D.wname[w] || w]), 'artW', drawArts);
+
+function all() { drawDps(); drawStyle(); drawTtk(); drawPairs(); drawCards(); drawArts(); }
+all();
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', all);
+new MutationObserver(all).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+</script>

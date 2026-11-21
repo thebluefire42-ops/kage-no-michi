@@ -2,12 +2,13 @@
 // players pick one of two paths to the next level; every path shows the reward that level gives
 // when it is cleared (stat upgrades, an imbuement, a talent, supplies or the monk's sacrifice).
 import { TAU, clamp, lerp, ease, seededRng } from './util.js';
-import { ROUTE, BOSSES, DIFFICULTY, DIFFICULTY_ODDS, REWARD_ODDS, REWARD_TIERS } from './config.js';
+import { ROUTE_ODDS, ROUTE_SHIFT, BOSSES, DIFFICULTY, DIFFICULTY_ODDS, REWARD_ODDS, REWARD_TIERS, RARITIES } from './config.js';
 import { TOWN_NAMES, LIBRARY_NAMES, MONK_NAMES, monkIndexForArea, pickName } from './names.js';
 import { BIOMES } from './world.js';
 import { input } from './input.js';
 import { sfx } from './audio.js';
 import { INK } from './rig.js';
+import { CORRUPT_INFO } from './corruption.js';
 
 const FONT_SERIF = '"Shippori Mincho", serif';
 const FONT_SANS = '"Zen Kaku Gothic New", sans-serif';
@@ -18,60 +19,82 @@ export const areaOf = (level) => (level > 30 ? 3 : Math.floor((level - 1) / 10))
 
 export const REWARDS = {
   stat:      { name: 'Town',       jp: '町', color: '#b8302a', desc: 'Choose 1 of 3 trainings' },
-  element:   { name: 'Imbuement',  jp: '宿', color: '#2a5a9a', desc: 'Choose 1 of 2 weapon imbuements' },
+  element:   { name: 'Shrine',     jp: '宿', color: '#2a5a9a', desc: 'Choose 1 of 2 weapon imbuements' },
   talent:    { name: 'Library',    jp: '書', color: '#a87a1a', desc: 'Choose 1 of 2 talent scrolls' },
-  item:      { name: 'Consumable', jp: '薬', color: '#2a7a4a', desc: 'Rest at a tea house: no fight, pick a consumable' },
+  item:      { name: 'Tea House',  jp: '薬', color: '#2a7a4a', desc: 'Rest at a tea house: no fight, pick a consumable' },
   art:       { name: 'Training Hall', jp: '道', color: '#7a1a3a', desc: 'Choose 1 of 2 techniques (one per weapon)' },
   sacrifice: { name: 'Temple',     jp: '寺', color: '#5a0a12', desc: 'The temple monk offers a dark pact' },
 };
 
 // ---------------------------------------------------------------- map generation
-function rollType(rng, sacP) {
-  if (rng() < sacP) return 'sacrifice';
-  const W = ROUTE.weights, keys = Object.keys(W), tot = keys.reduce((s, k) => s + W[k], 0);
+// The map branches: every path on offer leads on to two paths of its own. The players see the two paths they
+// can take now and, greyed out, the two that follow each of them (four), so they can plan a little ahead.
+// A node's two follow-ups (kids) are rolled when the node is first shown, with the odds of the part of the area
+// the next level falls in (ROUTE_ODDS) and the run's shifting weights for sacrifices and techniques (wmul).
+export const sectionOf = (level) => { if (level > 30) return 'area4'; const l = ((level - 1) % 10) + 1; return l === 3 || l === 6 || l === 9 ? 'inter' : 'section'; };
+function rollType(rng, level, wmul = {}, not = null) {
+  const W = ROUTE_ODDS[sectionOf(level)], keys = Object.keys(W).filter((k) => k !== not && !(not === 'sacrifice' && k === 'sacrifice'));
+  const w = keys.map((k) => W[k] * (wmul[k] || 1)), tot = w.reduce((s, x) => s + x, 0);
   let v = rng() * tot;
-  for (const k of keys) { v -= W[k]; if (v < 0) return k; }
-  return 'stat';
+  for (let i = 0; i < keys.length; i++) { v -= w[i]; if (v < 0) return keys[i]; }
+  return keys[0];
+}
+// two different paths for a level
+function rollPair(rng, level, area, used, wmul, y0 = 0.3, y1 = 0.7) {
+  const a = rollType(rng, level, wmul), b = rollType(rng, level, wmul, a);
+  return [decorateNode({ r: a, y: y0 }, area, rng, used), decorateNode({ r: b, y: y1 }, area, rng, used)];
+}
+// the run's shifting weights: choosing a sacrifice / technique makes the next ones rarer for a while, passing
+// them by makes them a little more likely each time
+export function shiftWeights(wmul, chosen) {
+  const S = ROUTE_SHIFT;
+  for (const k of S.keys) wmul[k] = Math.min(S.max, Math.max(S.min, (wmul[k] || 1) * (chosen === k ? S.drop : S.rise)));
+  return wmul;
+}
+// make sure every node in column c knows its two follow-ups (the boss column: the boss)
+export function ensureKids(route, c, wmul = {}) {
+  const n = route.cols.length, col = route.cols[c];
+  if (!col || c >= n - 1) return;
+  const rng = Math.random, used = new Set(route.used || []), level = col.level + 1;
+  col.nodes.forEach((nd) => {
+    if (nd.kids) return;
+    if (c + 1 === n - 1 && BOSSES[route.cols[n - 1].level]) { nd.kids = [route.cols[n - 1].nodes[0]]; return; }
+    nd.kids = rollPair(rng, level, route.area, used, wmul, clamp(nd.y - 0.12, 0.14, 0.86), clamp(nd.y + 0.12, 0.14, 0.86));
+  });
+  route.used = [...used];
+}
+// the team chose path i in column c: its follow-ups become the next column's paths (placed at the usual heights)
+export function takePath(route, c, i) {
+  route.path[c] = i;
+  const nd = route.cols[c] && route.cols[c].nodes[i], next = route.cols[c + 1];
+  if (!nd || !next || c + 1 >= route.cols.length - 1 || !nd.kids) return;
+  next.nodes = nd.kids.map((k, j) => ({ ...k, y: nd.kids.length > 1 ? [0.3, 0.7][j] : 0.5 }));
+}
+// Smuggler's Map: these paths are better (tier 0..3, see ITEM_CARDS.map)
+export function smuggle(nodes, area, tier) {
+  if (!nodes || !nodes.length) return;
+  if (!nodes.some((nd) => nd.q !== undefined) && tier >= 1) Object.assign(nodes[0], decorateNode({ r: 'stat', y: nodes[0].y }, area), { kids: nodes[0].kids });
+  for (const nd of nodes) {
+    if (nd.d !== undefined && (tier === 0 || tier === 3)) nd.d = tier === 3 ? 0 : Math.min(nd.d, 1);
+    if (nd.q !== undefined && tier >= 1) nd.q = Math.max(nd.q, tier >= 2 ? 2 : 1);
+    nd.smuggled = true;
+  }
 }
 
 // cols[i] = { level, nodes: [{ r: rewardType, y: 0..1 }] }. The first column (the area's opening level)
 // and the boss column have one node; every other column offers two paths.
-export function makeAreaMap(area, seed = Math.floor(Math.random() * 1e9)) {
+export function makeAreaMap(area, seed = Math.floor(Math.random() * 1e9), wmul = {}) {
   const [first, last] = AREAS[area];
-  const rng = seededRng(seed);
-  const n = last - first + 1, mids = n - 2;
-  let cols;
-  for (let tries = 0; tries < 200; tries++) {
-    cols = [];
-    let sac = 0;
-    for (let c = 0; c < n; c++) {
-      const level = first + c;
-      if (c === 0 || c === n - 1) { cols.push({ level, nodes: [{ r: 'stat', y: 0.5 }] }); continue; }
-      const sacP = ROUTE.sacMax * (c / mids); // rarer early in the area, up to sacMax at the end
-      const a = rollType(rng, sacP);
-      let b = rollType(rng, sacP);
-      for (let k = 0; k < 12 && (b === a || (a === 'sacrifice' && b === 'sacrifice')); k++) b = rollType(rng, sacP);
-      if (b === a) b = a === 'stat' ? 'element' : 'stat';
-      const j = (rng() - 0.5) * 0.08;
-      cols.push({ level, nodes: [{ r: a, y: 0.3 + j }, { r: b, y: 0.7 - j }] });
-      sac += (a === 'sacrifice') + (b === 'sacrifice');
-    }
-    if (sac >= ROUTE.sacMin && sac <= ROUTE.sacPerArea) break;
-    if (tries === 199) { // force the count into range
-      const all = cols.slice(1, n - 1).flatMap((col) => col.nodes);
-      while (all.filter((x) => x.r === 'sacrifice').length > ROUTE.sacPerArea) all.find((x) => x.r === 'sacrifice').r = 'stat';
-      if (!all.some((x) => x.r === 'sacrifice')) all[all.length - 1].r = 'sacrifice';
-    }
-  }
-  // every area has at least one Weapon Art path: if none rolled, one ordinary path (never the monk)
-  // somewhere in the middle of the area becomes one
-  if (mids > 0 && !cols.some((col) => col.nodes.some((x) => x.r === 'art'))) {
-    const spots = [];
-    for (let c = 1; c < n - 1; c++) for (const nd of cols[c].nodes) if (nd.r !== 'sacrifice') spots.push(nd);
-    if (spots.length) spots[Math.floor(rng() * spots.length)].r = 'art';
-  }
-  decorateNodes(cols, area, rng);
-  return { area, first, last, seed, cols, path: [] };
+  const rng = seededRng(seed), used = new Set();
+  const n = last - first + 1, cols = [];
+  for (let c = 0; c < n; c++) cols.push({ level: first + c, nodes: [] });
+  // the boss at the end; the first level of every area is a town (in the fortress: the castle town inside its walls)
+  cols[n - 1].nodes = [{ r: 'stat', y: 0.5 }];
+  cols[0].nodes = [decorateNode({ r: 'stat', y: 0.5 }, area, rng, used)];
+  if (area === 3) cols[0].nodes[0].name = 'Kagerō Castle Town';
+  const route = { area, first, last, seed, cols, path: [], used: [...used] };
+  ensureKids(route, 0, wmul);
+  return route;
 }
 
 // does this node's reward roll card rarities / is it a fight?
@@ -153,18 +176,18 @@ function kasumi(ctx, x, y, w, h, a) {
 // Each path shows a small card in the colours of the reward cards it leads to (training: cream washi,
 // imbuement: night blue, consumable: tea-house green, talent: old gold, technique: crimson, sacrifice: blood).
 const NODE = {
-  stat:      { paper: ['#f4ead2', '#e2d2ae'], band: '#3a3028', ink: '#2a1e14', accent: '#b8302a', edge: '#5a4a38' },
+  stat:      { paper: ['#f4ead2', '#e2d2ae'], band: '#3a3028', ink: '#2a1e14', accent: '#b8302a', edge: '#5a4a38' }, // town: light washi, dark ring
   element:   { paper: ['#2a3060', '#121634'], band: '#3a4a8a', ink: '#d8e6ff', accent: '#7ab0ff', edge: '#0a0c20', glow: 'rgba(120,170,255,0.55)' },
-  item:      { paper: ['#f1e4c6', '#dcc597'], band: '#3f6e34', ink: '#2a1e14', accent: '#3f6e34', edge: '#5a3a20' },
-  talent:    { paper: ['#e4d2a6', '#c2a46a'], band: '#3e2c16', ink: '#2c1e0e', accent: '#8a5a12', edge: '#3e2c16' },
+  item:      { paper: ['#f1e4c6', '#dcc597'], band: '#3f6e34', ink: '#2a1e14', accent: '#3f6e34', edge: '#5a3a20', glow: 'rgba(110,210,130,0.6)', halo: '90,190,110' }, // tea house: warm paper, green band, a green glow
+  talent:    { paper: ['#6a4c14', '#281a04'], band: '#8a6a20', ink: '#ffe6a0', accent: '#f0c050', edge: '#0e0904', glow: 'rgba(240,200,90,0.55)' }, // library: gold
   art:       { paper: ['#6a1420', '#2a060c'], band: '#0e0406', ink: '#f0c870', accent: '#f0c870', edge: '#0e0406' },
-  sacrifice: { paper: ['#3a141a', '#140608'], band: '#0a0304', ink: '#ff5a5a', accent: '#c8202a', edge: '#000', glow: 'rgba(220,30,40,0.6)' },
+  sacrifice: { paper: ['#2c2c2e', '#0a0a0c'], band: '#1a1a1c', ink: '#9a1018', accent: '#6a0c12', edge: '#000', glow: 'rgba(150,20,30,0.55)' }, // temple: near black, a dark red drop of blood
   boss:      { paper: ['#2a2228', '#0e0a0e'], band: '#a8322a', ink: '#f6e2bc', accent: '#a8322a', edge: '#000' },
 };
 // a short line for the tooltip
 const TIP = {
   stat: 'Improve your core skills',
-  element: 'Add an element to your weapon',
+  element: 'Add an imbuement to your weapon',
   item: 'Rest at a tea house: no fight, pick a consumable',
   talent: 'Learn new active talents',
   art: 'Learn new weapon techniques',
@@ -176,12 +199,30 @@ const IND = [
   { fill: '#e8e4da', glyph: '#3a3028', edge: '#4a4038' },
   { fill: '#7a1418', glyph: '#f8e8e0', edge: '#2a0406' },
 ];
-// how good an indicator reads (0 good .. 2 bad): Novice is good, High rewards are good
+// how good an indicator reads (0 good .. 2 bad): Easy is good, Epic+ / Legendary rewards are good
 export const diffTone = (d) => d;
-export const rewardTone = (q) => 2 - q;
+export const rewardTone = (q) => Math.max(0, 2 - q);
 // a small round badge next to a node: kind 'diff' shows a blade, kind 'rew' a jewel
 const IND_FIXED = { diff: { fill: '#a81e1e', glyph: '#fff2e4', edge: '#3a0606' }, rew: { fill: '#d0a030', glyph: '#3a2608', edge: '#5a3c0a' } };
-function indicator(ctx, x, y, r, tone, kind, fixed = false) {
+// Legendary in a tooltip: a bright band sweeps across the gold letters every ~1.6 s, and two little stars twinkle
+function legendaryShine(ctx, val, x, y, w, u, t) {
+  ctx.save();
+  const k = (t % 1.6) / 1.6, bx = x - 20 * u + (w + 40 * u) * k;
+  const g = ctx.createLinearGradient(bx - 12 * u, 0, bx + 12 * u, 0);
+  g.addColorStop(0, 'rgba(255,248,220,0)'); g.addColorStop(0.5, 'rgba(255,252,236,0.95)'); g.addColorStop(1, 'rgba(255,248,220,0)');
+  ctx.font = `800 ${Math.round(12 * u)}px ${FONT_SANS}`; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = g; ctx.fillText(val, x, y);
+  ctx.globalCompositeOperation = 'lighter';
+  for (const [ox, oy, ph] of [[w * 0.78, -7 * u, 0], [w * 0.12, 6 * u, 0.5]]) {
+    const a = Math.max(0, Math.sin((t * 2.2 + ph) * Math.PI)), r = (2 + 2.5 * a) * u;
+    if (a < 0.05) continue;
+    ctx.fillStyle = `rgba(255,236,160,${a})`;
+    ctx.beginPath(); ctx.moveTo(x + ox, y + oy - r); ctx.lineTo(x + ox + r * 0.28, y + oy); ctx.lineTo(x + ox, y + oy + r); ctx.lineTo(x + ox - r * 0.28, y + oy); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(x + ox - r, y + oy); ctx.lineTo(x + ox, y + oy + r * 0.28); ctx.lineTo(x + ox + r, y + oy); ctx.lineTo(x + ox, y + oy - r * 0.28); ctx.closePath(); ctx.fill();
+  }
+  ctx.restore();
+}
+export function indicator(ctx, x, y, r, tone, kind, fixed = false) {
   const C = fixed ? { fill: '#181014', glyph: '#ffffff', edge: '#181014' } : IND[tone]; // fixed: just the white icon, no badge (fill = the tooltip's dark, for the cut-out details)
   ctx.save(); ctx.translate(x, y);
   if (fixed) ctx.scale(1.3, 1.3);
@@ -260,7 +301,33 @@ function libraryIcon(ctx, s, ink) { // an open book
   }
   ctx.lineWidth = Math.max(1, s * 0.08); ctx.beginPath(); ctx.moveTo(0, -s * 0.38); ctx.lineTo(0, s * 0.52); ctx.stroke();
 }
-const NODE_ICON = { stat: townIcon, sacrifice: templeIcon, art: dojoIcon, talent: libraryIcon };
+function shrineIcon(ctx, s, ink) { // a shrine's torii gate: two pillars, the curved top beam with upturned ends, the tie beam
+  ctx.fillStyle = ink;
+  for (const k of [-1, 1]) { ctx.beginPath(); ctx.moveTo(k * s * 0.44 - s * 0.07, -s * 0.5); ctx.lineTo(k * s * 0.44 + s * 0.07, -s * 0.5); ctx.lineTo(k * s * 0.5 + s * 0.08, s * 0.82); ctx.lineTo(k * s * 0.5 - s * 0.08, s * 0.82); ctx.closePath(); ctx.fill(); }
+  ctx.beginPath(); ctx.moveTo(-s * 0.95, -s * 0.8); ctx.quadraticCurveTo(0, -s * 0.6, s * 0.95, -s * 0.8); // kasagi
+  ctx.lineTo(s * 0.86, -s * 0.6); ctx.quadraticCurveTo(0, -s * 0.46, -s * 0.86, -s * 0.6); ctx.closePath(); ctx.fill();
+  ctx.fillRect(-s * 0.7, -s * 0.34, s * 1.4, s * 0.13); // nuki
+  ctx.fillRect(-s * 0.05, -s * 0.52, s * 0.1, s * 0.2); // the plaque between the beams
+}
+function teapotIcon(ctx, s, ink) { // a simple flat teapot seen from the side: squat body, lid with a knob, short spout right, loop handle left
+  ctx.fillStyle = ink; ctx.strokeStyle = ink; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.beginPath(); ctx.ellipse(0, s * 0.22, s * 0.56, s * 0.42, 0, 0, TAU); ctx.fill(); // body
+  ctx.fillRect(-s * 0.32, s * 0.56, s * 0.64, s * 0.1); // foot
+  ctx.beginPath(); ctx.ellipse(0, -s * 0.2, s * 0.3, s * 0.11, 0, Math.PI, 0); ctx.fill(); // lid
+  ctx.beginPath(); ctx.arc(0, -s * 0.36, s * 0.08, 0, TAU); ctx.fill(); // knob
+  ctx.beginPath(); ctx.moveTo(s * 0.44, s * 0.08); ctx.lineTo(s * 0.86, -s * 0.18); ctx.lineTo(s * 0.92, -s * 0.06); ctx.lineTo(s * 0.5, s * 0.36); ctx.closePath(); ctx.fill(); // spout
+  ctx.lineWidth = s * 0.12; ctx.beginPath(); ctx.arc(-s * 0.56, s * 0.2, s * 0.22, Math.PI * 0.5, Math.PI * 1.5); ctx.stroke(); // handle
+}
+function bloodDropIcon(ctx, s) { // a single drop of blood, bright enough to read on the near-black temple node, with a glint
+  const shape = () => { ctx.beginPath(); ctx.moveTo(0, -s * 0.92); ctx.bezierCurveTo(s * 0.18, -s * 0.5, s * 0.66, -s * 0.05, s * 0.6, s * 0.34);
+    ctx.bezierCurveTo(s * 0.55, s * 0.78, -s * 0.55, s * 0.78, -s * 0.6, s * 0.34); ctx.bezierCurveTo(-s * 0.66, -s * 0.05, -s * 0.18, -s * 0.5, 0, -s * 0.92); };
+  const gr = ctx.createLinearGradient(-s * 0.4, -s * 0.6, s * 0.4, s * 0.7);
+  gr.addColorStop(0, '#ff4a52'); gr.addColorStop(0.55, '#e0202e'); gr.addColorStop(1, '#a8101c');
+  shape(); ctx.fillStyle = gr; ctx.fill();
+  ctx.strokeStyle = 'rgba(255,150,150,0.55)'; ctx.lineWidth = Math.max(1, s * 0.06); ctx.stroke(); // a light rim so it stands off the dark
+  ctx.fillStyle = 'rgba(255,230,230,0.75)'; ctx.beginPath(); ctx.ellipse(-s * 0.26, s * 0.2, s * 0.1, s * 0.22, 0.35, 0, TAU); ctx.fill();
+}
+const NODE_ICON = { stat: townIcon, sacrifice: bloodDropIcon, art: dojoIcon, talent: libraryIcon, element: shrineIcon, item: teapotIcon };
 
 // a round node centred on (x, y), h across, in the colours of its reward card:
 // the card's paper inside, its header band as the ring, its ink for the kanji.
@@ -272,7 +339,7 @@ function nodeCard(ctx, x, y, h, type, jp, { hidden = false, sel = false, option 
   if (option) { // a halo that keeps rippling outwards, so the way on is easy to spot
     for (let k = 0; k < 2; k++) {
       const q = (t * 0.8 + k * 0.5) % 1;
-      ctx.strokeStyle = sel ? `rgba(240,200,96,${0.8 * (1 - q)})` : `rgba(200,48,46,${0.55 * (1 - q)})`; ctx.lineWidth = Math.max(1.5, r * 0.12);
+      ctx.strokeStyle = sel ? `rgba(${S.halo || '240,200,96'},${0.8 * (1 - q)})` : `rgba(${S.halo || '200,48,46'},${0.55 * (1 - q)})`; ctx.lineWidth = Math.max(1.5, r * 0.12);
       ctx.beginPath(); ctx.arc(0, 0, r * (1.05 + q * 0.55), 0, TAU); ctx.stroke();
     }
   }
@@ -287,6 +354,27 @@ function nodeCard(ctx, x, y, h, type, jp, { hidden = false, sel = false, option 
   else txt(ctx, jp, 0, r * 0.05, r * 0.92, S.ink, 800, FONT_SERIF);
   ctx.strokeStyle = sel ? '#f0c860' : S.edge; ctx.lineWidth = sel ? Math.max(2.5, r * 0.12) : Math.max(1, r * 0.06); ctx.beginPath(); ctx.arc(0, 0, r, 0, TAU); ctx.stroke();
   ctx.restore();
+}
+
+// a node card drawn once into its own canvas and desaturated by hand (cached per type, size and amount)
+const GREY = new Map();
+function greyCard(type, h, amount) {
+  const key = type + '|' + Math.round(h) + '|' + amount;
+  let c = GREY.get(key);
+  if (c) return c;
+  if (GREY.size > 120) GREY.clear(); // (sizes change when the window is resized)
+  const pad = Math.ceil(h * 0.4), size = Math.ceil(h) + pad * 2;
+  c = document.createElement('canvas'); c.width = c.height = size;
+  const x = c.getContext('2d');
+  nodeCard(x, size / 2, size / 2, h, type, REWARDS[type] ? REWARDS[type].jp : '', {});
+  const img = x.getImageData(0, 0, size, size), d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const l = d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
+    d[i] += (l - d[i]) * amount; d[i + 1] += (l - d[i + 1]) * amount; d[i + 2] += (l - d[i + 2]) * amount;
+  }
+  x.putImageData(img, 0, 0);
+  GREY.set(key, c);
+  return c;
 }
 
 // a small hash for steady, seeded jitter
@@ -409,8 +497,8 @@ export class RouteScreen {
   open(route, next, { readonly = false, onChoose = () => {}, sel = 0 } = {}) {
     this.route = route; this.next = next; this.readonly = readonly; this.onChoose = onChoose;
     this.col = next - route.first;
-    this.sel = clamp(sel, 0, this.options.length - 1); this.t = 0; this.chosen = -1; this.goT = 0; this.active = true;
-    this.hover = -1;
+    this.reveal = null; this.sel = clamp(sel, 0, this.options.length - 1); this.t = 0; this.chosen = -1; this.goT = 0; this.active = true;
+    this.hover = -1; this.hoverKid = null; this.look = null;
     this.lastMouse = input.mouse.lastMove;
     sfx.flip();
   }
@@ -421,28 +509,50 @@ export class RouteScreen {
   update(dt) {
     if (!this.active) return;
     this.t += dt;
+    if (this.reveal) { // the chosen node turns out corrupted: play it out, then go
+      const R = this.reveal, t0 = R.t; R.t += dt;
+      for (const at of R.thunder) if (t0 < at && R.t >= at) sfx.thunder();
+      if (R.t >= R.dur && !R.done) { R.done = true; this.active = false; if (R.cb) R.cb(); }
+      return;
+    }
     if (this.chosen >= 0) {
       this.goT += dt;
       if (this.goT > 1.05) { this.active = false; this.onChoose(this.chosen); }
       return;
     }
     if (this.t < 0.8) return;
-    const n = this.options.length;
-    if (!this.readonly && (input.pressed('up') || input.pressed('left'))) this.setSel((this.sel + n - 1) % n);
-    if (!this.readonly && (input.pressed('down') || input.pressed('right'))) this.setSel((this.sel + 1) % n);
+    const n = this.options.length, kids = this.kidList();
+    // keys / controller: up and down pick a path; right looks ahead at the greyed paths beyond (up and down then
+    // step through them, showing their tooltips), left comes back. The joiner can look ahead too.
+    if (this.look != null && !kids.length) this.look = null;
+    if (input.pressed('right') && kids.length && this.look == null) { this.look = Math.max(0, kids.findIndex((K) => K.i === this.sel)); sfx.move(); }
+    else if (input.pressed('left') && this.look != null) { this.look = null; sfx.move(); }
+    else if (input.pressed('up') || input.pressed('down')) {
+      const d = input.pressed('up') ? -1 : 1;
+      if (this.look != null) { this.look = (this.look + d + kids.length) % kids.length; sfx.move(); if (!this.readonly) this.setSel(kids[this.look].i); }
+      else if (!this.readonly) this.setSel((this.sel + d + n) % n);
+    }
     // mouse: hover a path's card to select it (and see its tooltip), click to travel
     const m = input.mouse, v = this.g.view;
-    let hov = -1;
+    let hov = -1, kid = null;
     if (this.layoutCache) {
       const mx = m.x * v.dpr, my = m.y * v.dpr, h = this.L.nodeH;
       this.options.forEach((nd, i) => { const [x, y] = this.nodePos(this.col, i); if (Math.hypot(mx - x, my - y) < h * 0.7) hov = i; });
+      // the greyed paths after these: hover one to see what it is
+      if (hov < 0) kids.forEach((K) => { const [x, y] = this.kidPos(K.i, K.k); if (Math.hypot(mx - x, my - y) < h * 0.6) kid = K; });
     }
-    this.hover = hov;
+    if ((hov >= 0 || kid) && m.lastMove !== this.lastMouse) this.look = null; // the mouse takes over
+    this.hover = hov; this.hoverKid = kid || (this.look != null ? kids[this.look] : null);
     if (this.readonly) return; // online joiner: sees the tooltips (the host's pick, or a path they hover) but the host chooses
     if (hov >= 0 && m.lastMove !== this.lastMouse) { this.setSel(hov); this.lastMouse = m.lastMove; }
+    // the corner button (mouse only): the next node turns out corrupted
+    if (m.clicked && this.corruptRect) {
+      const [bx, by, bw, bh] = this.corruptRect, mx = m.x * v.dpr, my = m.y * v.dpr;
+      if (mx > bx && mx < bx + bw && my > by && my < by + bh) { this.g.forceCorrupt = !this.g.forceCorrupt; sfx.select(); m.clicked = false; return; }
+    }
     if (input.pressed('confirm') || (m.clicked && hov >= 0)) {
       input.eat('confirm');
-      this.choose(hov >= 0 && m.clicked ? hov : this.sel);
+      this.choose(hov >= 0 && m.clicked ? hov : this.look != null && kids[this.look] ? kids[this.look].i : this.sel);
     }
   }
   choose(i) {
@@ -485,6 +595,28 @@ export class RouteScreen {
     }
     return pts;
   }
+  // the greyed-out paths one level further: the two follow-ups of each path on offer (not the boss)
+  kidList() {
+    const out = [], n = this.route.cols.length;
+    if (this.col + 1 >= n - 1) return out;
+    this.options.forEach((nd, i) => (nd.kids || []).forEach((kd, k) => out.push({ i, k, nd: kd })));
+    return out;
+  }
+  kidPos(i, k) {
+    const L = this.L, R = this.route, n = R.cols.length, step = (L.pw - L.pad * 2) / (n - 1), c = this.col + 1;
+    const nd = this.options[i], kd = nd && nd.kids && nd.kids[k];
+    const jx = (hash(R.seed % 997, c, i * 2 + k + 11) - 0.5) * step * 0.3;
+    const y = clamp(kd ? kd.y : 0.5, 0.12, 0.88);
+    return [L.px + L.pad + c * step + jx, L.py + L.ph * y];
+  }
+  // a crooked trail between two points (seeded by a, b)
+  trailPts(x1, y1, x2, y2, a, b) {
+    const u = this.L.u, S = this.route.seed % 983;
+    const dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy) || 1, nx = -dy / len, ny = dx / len;
+    const amp = (8 + hash(S, a, b * 3) * 10) * u, ph = hash(S, a + 3, b + 5) * TAU, pts = [];
+    for (let k = 0; k <= 20; k++) { const q = k / 20, off = Math.sin(q * Math.PI * 1.5 + ph) * Math.sin(q * Math.PI) * amp; pts.push([x1 + dx * q + nx * off, y1 + dy * q + ny * off]); }
+    return pts;
+  }
   // path index the team took in column c (null if this run started later in the area)
   taken(c) { const p = this.route.path[c], col = this.route.cols[c]; return p === undefined || p === null || !col || !col.nodes[p] ? null : p; }
 
@@ -524,6 +656,8 @@ export class RouteScreen {
     }
     this.drawTooltip(ctx, L, t);
     this.drawInfo(ctx, L, t);
+    this.drawCorruptButton(ctx, L, t);
+    if (this.reveal) this.drawReveal(ctx, L);
     ctx.restore();
   }
 
@@ -551,8 +685,8 @@ export class RouteScreen {
     for (let i = 0; i < 9; i++) { const w = (90 + rng() * 120) * u, x = px + rng() * (pw - w); mountain(ctx, x, py + ph * 0.17, w, (40 + rng() * 45) * u, rng, tint); }
     for (let i = 0; i < 6; i++) { const w = (80 + rng() * 100) * u, x = px + rng() * (pw - w); mountain(ctx, x, py + ph * 0.99, w, (30 + rng() * 30) * u, rng, tint); }
     // the area's scenery, kept clear of the nodes
-    const spots = [];
-    this.route.cols.forEach((col, c) => col.nodes.forEach((_, i) => spots.push(this.nodePos(c, i))));
+    const spots = [], nC = this.route.cols.length, stepX = (L.pw - L.pad * 2) / (nC - 1);
+    for (let c = 0; c < nC; c++) for (const yy of [0.18, 0.3, 0.42, 0.5, 0.58, 0.7, 0.82]) spots.push([L.px + L.pad + c * stepX, L.py + L.ph * yy]);
     const free = (x, y, d) => spots.every(([nx, ny]) => Math.hypot(nx - x, ny - y) > d);
     const place = (count, d, draw, band = 'any') => {
       for (let i = 0, made = 0; i < count * 6 && made < count; i++) {
@@ -634,6 +768,14 @@ export class RouteScreen {
       });
       ctx.setLineDash([]);
     }
+    // the paths beyond: faint dotted trails from each path on offer to its two follow-ups (or to the boss)
+    ctx.setLineDash([3 * u, 6 * u]); ctx.lineWidth = 1.6 * u;
+    for (const K of this.kidList()) {
+      const [x1, y1] = this.nodePos(this.col, K.i), [x2, y2] = this.kidPos(K.i, K.k), lit = (this.hover >= 0 ? this.hover : this.sel) === K.i && this.chosen < 0;
+      ctx.strokeStyle = lit ? 'rgba(140,60,40,0.55)' : 'rgba(110,80,60,0.3)'; line(this.trailPts(x1, y1, x2, y2, this.col * 7 + K.i, K.k));
+    }
+    if (this.col + 1 === R.cols.length - 1) this.options.forEach((_, i) => { const [x1, y1] = this.nodePos(this.col, i), [x2, y2] = this.nodePos(this.col + 1, 0); ctx.strokeStyle = 'rgba(110,60,50,0.35)'; line(this.trailPts(x1, y1, x2, y2, this.col * 7 + i, 9)); });
+    ctx.setLineDash([]);
     ctx.restore();
   }
 
@@ -668,6 +810,16 @@ export class RouteScreen {
         ctx.restore();
       });
     });
+    // the greyed-out paths one level further (hover one to see what it holds)
+    for (const K of this.kidList()) {
+      const [x, y] = this.kidPos(K.i, K.k), hv = this.hoverKid && this.hoverKid.i === K.i && this.hoverKid.k === K.k;
+      const lit = (this.hover >= 0 ? this.hover : this.sel) === K.i && this.chosen < 0;
+      // pre-rendered greyed sprites: a live ctx.filter here cost ~13 ms a frame and made the map lag
+      const spr = greyCard(K.nd.r, L.nodeH * 0.66, hv ? 0.25 : 0.85);
+      ctx.save(); ctx.globalAlpha = hv ? 0.95 : lit ? 0.7 : 0.48;
+      ctx.drawImage(spr, x - spr.width / 2, y - spr.height / 2);
+      ctx.restore();
+    }
   }
 
   drawBossNode(ctx, x, y, h, level, hidden, t) {
@@ -686,10 +838,10 @@ export class RouteScreen {
 
   // undiscovered levels hide under drifting kasumi clouds
   drawFog(ctx, L, t) {
-    if (this.col >= this.route.cols.length - 1) return;
+    if (this.col + 1 >= this.route.cols.length - 1) return;
     const u = L.u;
-    const [nx] = this.nodePos(this.col, 0);
-    const [nx2] = this.nodePos(Math.min(this.route.cols.length - 1, this.col + 1), 0);
+    const [nx] = this.kidPos(0, 0);
+    const [nx2] = this.nodePos(Math.min(this.route.cols.length - 1, this.col + 2), 0);
     const fx = Math.max(nx + L.nodeH * 0.9, nx + (nx2 - nx) * 0.72);
     const g = ctx.createLinearGradient(fx - 30 * u, 0, fx + 60 * u, 0);
     g.addColorStop(0, 'rgba(240,230,205,0)'); g.addColorStop(1, 'rgba(240,230,205,0.82)');
@@ -728,19 +880,23 @@ export class RouteScreen {
   // a small tooltip over the path under the cursor (or the selected one): what that reward is
   drawTooltip(ctx, L, t) {
     if (this.chosen >= 0 || this.t < 0.8) return;
-    const i = this.hover >= 0 ? this.hover : this.sel, nd = this.options[i], col = this.route.cols[this.col];
-    if (!nd || BOSSES[col.level]) return;
-    const u = L.u, R = REWARDS[nd.r], [x, y] = this.nodePos(this.col, i);
+    const K = this.hoverKid, i = this.hover >= 0 ? this.hover : this.sel, nd = K ? K.nd : this.options[i], col = this.route.cols[this.col + (K ? 1 : 0)];
+    if (!nd || !col || BOSSES[col.level]) return;
+    const u = L.u, R = REWARDS[nd.r], [x, y] = K ? this.kidPos(K.i, K.k) : this.nodePos(this.col, i);
     ctx.save(); ctx.globalAlpha = clamp((this.t - 0.8) / 0.25, 0, 1);
     const tip = TIP[nd.r] || R.desc;
     // lines: the place's name (towns, temples, libraries), what it gives, then its difficulty and rewards
     const lines = [];
     if (nd.name) lines.push({ text: nd.name, size: 12.5, col: '#f0c870', font: FONT_SERIF, weight: 800 });
     lines.push({ text: tip, size: 12, col: 'rgba(248,240,222,0.85)' });
+    if (K) lines.push({ text: `Level ${this.next + 1} · after ${REWARDS[this.options[K.i].r].name}`, size: 11, col: 'rgba(200,190,170,0.75)' });
+    if (nd.smuggled) lines.push({ text: "Smuggler's Map: a better road", size: 11, col: '#e8c070' });
     const stats = [];
-    const LMH = ['Low', 'Medium', 'High'], DANGER = DIFFICULTY.map((x) => x.name); // Easy / Normal / Difficult
+    const TIERS = REWARD_TIERS.map((x) => x.name), DANGER = DIFFICULTY.map((x) => x.name); // Common+ / Rare+ / Epic+ / Legendary; Easy / Normal / Hard
     if (nd.d !== undefined) stats.push(['', DANGER[nd.d], diffTone(nd.d), 'diff']);
-    if (nd.q !== undefined) stats.push(['', LMH[nd.q], rewardTone(nd.q), 'rew']);
+    // the rewards are only hinted: a Hard fight shows its tier one step low, Normal two, Easy three (never below Common+),
+    // so an easy road is more of a gamble. (The cards themselves still roll on the real tier, nd.q.)
+    if (nd.q !== undefined) { const shown = Math.max(0, nd.q - (nd.d === undefined ? 0 : 3 - nd.d)); stats.push(['', TIERS[shown], rewardTone(shown), 'rew']); }
     const font = (size, weight = 700, f = FONT_SANS) => { ctx.font = `${weight} ${Math.round(size * u)}px ${f}`; };
     let w = 90 * u;
     for (const l of lines) { font(l.size, l.weight, l.font); w = Math.max(w, ctx.measureText(l.text).width); }
@@ -755,18 +911,108 @@ export class RouteScreen {
     ctx.fillStyle = 'rgba(24,16,20,0.94)'; ctx.beginPath(); ctx.moveTo(x - 7 * u, by + h); ctx.lineTo(x + 7 * u, by + h); ctx.lineTo(x, by + h + 8 * u); ctx.closePath(); ctx.fill();
     txt(ctx, `${R.jp}  ${R.name}`, bx + 12 * u, by + 17 * u, 14 * u, '#fff4d8', 800, FONT_SERIF, 'left');
     lines.forEach((l, k) => txt(ctx, l.text, bx + 12 * u, by + 38 * u + k * LH, l.size * u, l.col, l.weight || 700, l.font || FONT_SANS, 'left'));
-    let sx = bx + 12 * u; const sy = by + 38 * u + lines.length * LH + 4 * u;
-    for (const [lab, val, tone, kind] of stats) {
-      indicator(ctx, sx + 7 * u, sy, 7.5 * u, tone, kind, true);
-      sx += 20 * u;
-      txt(ctx, lab, sx, sy, 12 * u, 'rgba(248,240,222,0.7)', 700, FONT_SANS, 'left');
-      font(12); sx += ctx.measureText(lab).width;
-      // danger Easy/Normal/Difficult = green/orange/red; rewards the other way round (High is the good one)
-      const good = kind === 'diff' ? 2 - DANGER.indexOf(val) : LMH.indexOf(val);
-      txt(ctx, val, sx + 1 * u, sy + 1 * u, 12 * u, 'rgba(0,0,0,0.75)', 800, FONT_SANS, 'left'); // a dark drop so the colour stands off the paper
-      txt(ctx, val, sx, sy, 12 * u, ['#ff3b2e', '#ffa22e', '#3ee05a'][good], 800, FONT_SANS, 'left');
-      font(12, 800); sx += ctx.measureText(val).width + 14 * u;
+    // the bottom row, always in the same places: danger bottom left (icon, then text), rewards bottom right (text, then icon)
+    const sy = by + 38 * u + lines.length * LH + 4 * u;
+    for (const [, val, tone, kind] of stats) {
+      // danger Easy/Normal/Hard = green/orange/red; rewards in the card rarity colours (Common+ beige .. Legendary gold)
+      const q = TIERS.indexOf(val), col = kind === 'diff' ? ['#ff3b2e', '#ffa22e', '#3ee05a'][2 - DANGER.indexOf(val)] : RARITIES[q].color;
+      font(12, 800); const vw = ctx.measureText(val).width;
+      const left = kind === 'diff', ix = left ? bx + 19 * u : bx + w - 19 * u, tx = left ? bx + 32 * u : bx + w - 32 * u - vw;
+      indicator(ctx, ix, sy, 7.5 * u, tone, kind, true);
+      txt(ctx, val, tx + 1 * u, sy + 1 * u, 12 * u, 'rgba(0,0,0,0.75)', 800, FONT_SANS, 'left'); // a dark drop so the colour stands off the paper
+      txt(ctx, val, tx, sy, 12 * u, col, 800, FONT_SANS, 'left');
+      if (kind === 'rew' && q === 3) legendaryShine(ctx, val, tx, sy, vw, u, t);
     }
+    ctx.restore();
+  }
+
+  // the chosen node turned out corrupted: the map darkens and the corruption takes it (mist rolls in, lightning
+  // strikes it, a blood moon rises), then its name. cb continues to the level.
+  startReveal(kind, i, cb) {
+    const v = this.g.view, u = this.L ? this.L.u : 1, [nx, ny] = this.layoutCache ? this.nodePos(this.col, i) : [v.W / 2, v.H / 2];
+    const bolts = kind === 'storm' ? [0.45, 0.95, 1.35, 1.6].map((at) => {
+      const pts = [], x0 = nx + (Math.random() - 0.5) * 220 * u;
+      for (let k = 0; k <= 10; k++) { const f = k / 10; pts.push([x0 + (nx - x0) * f + (k && k < 10 ? (Math.random() - 0.5) * 46 * u : 0), -20 + (ny + 20) * f]); }
+      return { at, pts };
+    }) : [];
+    this.active = true;
+    this.reveal = { kind, i, cb, t: 0, dur: 2.6, nx, ny, bolts, thunder: bolts.map((b) => b.at), done: false };
+    if (kind === 'mist') sfx.haunt(); else if (kind === 'bloodmoon') sfx.bossRoar();
+  }
+  drawReveal(ctx, L) {
+    const R = this.reveal, u = L.u, v = this.g.view, W = v.W, H = v.H, t = R.t;
+    const intro = clamp(t / 0.7, 0, 1), out = clamp((R.dur - t) / 0.35, 0, 1), e = ease.outCubic(intro);
+    const CI = CORRUPT_INFO[R.kind], { nx, ny } = R;
+    ctx.save();
+    const tint = { mist: '24,28,36', storm: '6,8,22', bloodmoon: '10,2,8' }[R.kind];
+    ctx.fillStyle = `rgba(${tint},${0.7 * e})`; ctx.fillRect(0, 0, W, H);
+    if (R.kind === 'mist') { // banks of mist roll in from both sides and swallow the node
+      for (let k = 0; k < 14; k++) {
+        const side = k % 2 ? -1 : 1, row = Math.floor(k / 2), y = H * (0.12 + row * 0.13);
+        const x = side > 0 ? -W * 0.25 + (W * 0.5 + 60 * u * row) * e : W * 1.25 - (W * 0.5 + 60 * u * row) * e;
+        const r = (150 + (k * 37) % 90) * u, gr = ctx.createRadialGradient(x, y, 0, x, y, r);
+        gr.addColorStop(0, `rgba(208,214,222,${0.75 * e})`); gr.addColorStop(1, 'rgba(200,206,214,0)');
+        ctx.fillStyle = gr; ctx.save(); ctx.translate(x, y); ctx.scale(1.8, 0.7); ctx.beginPath(); ctx.arc(0, 0, r, 0, TAU); ctx.restore(); ctx.fill();
+      }
+    } else if (R.kind === 'storm') { // rain, and bolts that hit the node one after another
+      ctx.strokeStyle = 'rgba(180,200,235,0.35)'; ctx.lineWidth = 1.2 * u; ctx.beginPath();
+      for (let k = 0; k < 140; k++) { const x = ((k * 97.3 + t * 260) % (W + 60)) - 30, y = ((k * 53.7 + t * 1100) % (H + 60)) - 30; ctx.moveTo(x, y); ctx.lineTo(x - 5 * u, y - 22 * u); }
+      ctx.stroke();
+      for (const b of R.bolts) {
+        const a = t >= b.at ? 1 - clamp((t - b.at) / 0.3, 0, 1) : 0;
+        if (a <= 0) continue;
+        ctx.fillStyle = `rgba(230,238,255,${0.55 * a})`; ctx.fillRect(0, 0, W, H); // the flash
+        for (const [lw, col] of [[10 * u, `rgba(150,180,255,${0.45 * a})`], [3 * u, `rgba(255,255,255,${a})`]]) {
+          ctx.strokeStyle = col; ctx.lineWidth = lw; ctx.lineJoin = 'round'; ctx.beginPath(); b.pts.forEach((p, k) => (k ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]))); ctx.stroke();
+        }
+      }
+    } else { // a blood moon rises behind the map
+      const r = Math.min(W, H) * 0.17, mx = W * 0.5, my = H * (0.95 - 0.55 * ease.outCubic(clamp(t / 1.8, 0, 1)));
+      const halo = ctx.createRadialGradient(mx, my, r * 0.8, mx, my, r * 2.6);
+      halo.addColorStop(0, `rgba(170,30,40,${0.45 * e})`); halo.addColorStop(1, 'rgba(120,10,20,0)');
+      ctx.fillStyle = halo; ctx.beginPath(); ctx.arc(mx, my, r * 2.6, 0, TAU); ctx.fill();
+      const disc = ctx.createRadialGradient(mx - r * 0.3, my - r * 0.3, r * 0.1, mx, my, r);
+      disc.addColorStop(0, `rgba(226,92,70,${0.95 * e})`); disc.addColorStop(1, `rgba(110,16,22,${0.95 * e})`);
+      ctx.fillStyle = disc; ctx.beginPath(); ctx.arc(mx, my, r, 0, TAU); ctx.fill();
+      ctx.fillStyle = `rgba(70,8,14,${0.35 * e})`;
+      for (const [cx, cy, cr] of [[-0.3, -0.1, 0.18], [0.25, 0.2, 0.13], [0.1, -0.35, 0.09], [-0.1, 0.4, 0.11]]) { ctx.beginPath(); ctx.arc(mx + cx * r, my + cy * r, cr * r, 0, TAU); ctx.fill(); }
+    }
+    // the node itself: rings of the corruption pulsing outward
+    const ring = { mist: '214,220,230', storm: '170,200,255', bloodmoon: '255,70,90' }[R.kind];
+    for (let k = 0; k < 3; k++) {
+      const f = ((t * 0.9 + k / 3) % 1), r = (20 + f * 90) * u;
+      ctx.strokeStyle = `rgba(${ring},${(1 - f) * 0.8 * intro})`; ctx.lineWidth = 3 * u; ctx.beginPath(); ctx.arc(nx, ny, r, 0, TAU); ctx.stroke();
+    }
+    // its name
+    const a = clamp((t - 0.5) / 0.5, 0, 1) * out, sc = 1 + 0.25 * (1 - ease.outCubic(clamp((t - 0.5) / 0.6, 0, 1)));
+    ctx.globalAlpha = a;
+    ctx.save(); ctx.translate(W / 2, H * 0.4); ctx.scale(sc, sc);
+    txt(ctx, CI.jp, 2 * u, 4 * u, 92 * u, 'rgba(0,0,0,0.6)', 800, FONT_SERIF);
+    txt(ctx, CI.jp, 0, 0, 92 * u, `rgb(${ring})`, 800, FONT_SERIF);
+    ctx.restore();
+    txt(ctx, `Corrupted · ${CI.name}`, W / 2, H * 0.4 + 82 * u, 32 * u, '#f6eee6', 800, FONT_SERIF);
+    txt(ctx, CI.sub, W / 2, H * 0.4 + 116 * u, 15 * u, 'rgba(240,226,220,0.8)', 700);
+    ctx.restore();
+  }
+
+  // bottom right, mouse only (not for the online joiner): a small button that makes the next node corrupted
+  drawCorruptButton(ctx, L, t) {
+    this.corruptRect = null;
+    if (this.readonly || this.chosen >= 0 || input.players[0].mode !== 'kbm' || t < 0.6) return;
+    const u = L.u, v = this.g.view, on = !!this.g.forceCorrupt;
+    const w = 192 * u, h = 30 * u, x = v.W - w - 18 * u, y = v.H - h - 18 * u;
+    this.corruptRect = [x, y, w, h];
+    const m = input.mouse, mx = m.x * v.dpr, my = m.y * v.dpr, hov = mx > x && mx < x + w && my > y && my < y + h;
+    ctx.save();
+    rr(ctx, x, y, w, h, 5 * u);
+    ctx.fillStyle = on ? 'rgba(112,18,46,0.94)' : hov ? 'rgba(46,24,40,0.9)' : 'rgba(20,14,22,0.72)'; ctx.fill();
+    ctx.strokeStyle = on ? '#ff7a96' : hov ? 'rgba(255,190,210,0.7)' : 'rgba(240,220,200,0.32)'; ctx.lineWidth = 1.5 * u; ctx.stroke();
+    // a small blood-red eye-of-the-storm swirl as the icon
+    const ix = x + 16 * u, iy = y + h / 2;
+    ctx.strokeStyle = on ? '#ffd0dc' : '#d8607a'; ctx.lineWidth = 2 * u; ctx.beginPath();
+    for (let a = 0; a < TAU * 1.6; a += 0.2) { const r = (1.5 + a * 1.25) * u; const px = ix + Math.cos(a + t * 2) * r, py = iy + Math.sin(a + t * 2) * r; a ? ctx.lineTo(px, py) : ctx.moveTo(px, py); }
+    ctx.stroke();
+    txt(ctx, on ? 'Next node: corrupted' : 'Corrupt next node', x + 32 * u, y + h / 2 + 0.5 * u, 12 * u, on ? '#fff0f4' : 'rgba(248,232,226,0.85)', 800, FONT_SANS, 'left');
     ctx.restore();
   }
 
@@ -777,7 +1023,7 @@ export class RouteScreen {
     const pad = input.players[0] && input.players[0].mode === 'pad';
     const n = this.options.length;
     const how = this.readonly ? 'The host is choosing the route…'
-      : n > 1 ? (pad ? '▲ ▼ choose a path · Ⓐ travel' : '↑ ↓ or click a path · Enter to travel') : (pad ? 'Ⓐ to travel' : 'Enter or click to travel');
+      : (n > 1 ? (pad ? '▲ ▼ choose a path · ' : '↑ ↓ or click a path · ') : '') + (this.kidList().length ? (this.look != null ? (pad ? '◀ back · ' : '← back · ') : (pad ? '▶ look ahead · ' : '→ look ahead · ')) : '') + (pad ? 'Ⓐ travel' : 'Enter to travel');
     txt(ctx, how, v.W / 2, L.py + L.ph + 34 * u, 14 * u, this.readonly ? '#8fd0ff' : 'rgba(248,240,222,0.8)', 800);
     ctx.restore();
   }

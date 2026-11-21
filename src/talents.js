@@ -7,20 +7,48 @@ import { input } from './input.js';
 
 export const TALENT_KEYS = Object.keys(TALENTS);
 
-export function talentCd(t) { return Math.max(TALENT_MIN_CD * (t.minMul || 1), TALENTS[t.key].cd[t.rarity || 0] * t.cdMul); }
+// (cd may be one number for every rarity, or a list per rarity)
+const baseCd = (T, r) => (Array.isArray(T.cd) ? T.cd[r || 0] : T.cd);
+export function talentCd(t) { return Math.max(TALENT_MIN_CD * (t.minMul || 1), baseCd(TALENTS[t.key], t.rarity) * t.cdMul); }
 
 // what a talent does at a rarity: num = the line on the card, short = the readout value, cd = its cooldown
+// a shadow clone's hit before your damage bonuses: a share of your weapon's basic damage per second
+export function shadowHit(p) { const T = TALENTS.shadows, w = p.weapons[0]; return T.share * (T.ref[w && w.key] ?? 12) * T.interval; }
+
 export function talentInfo(key, r) {
-  const T = TALENTS[key], cd = T.cd[r];
+  const T = TALENTS[key], cd = baseCd(T, r);
   switch (key) {
-    case 'arrowRain': { const hits = Math.round(T.dur / T.tick); return { cd, num: `${T.dmg[r]} damage × ${hits} hits`, short: `${T.dmg[r]}×${hits}` }; }
-    case 'meteor': return { cd, num: `${T.dmg[r]} damage`, short: `${T.dmg[r]}` };
+    case 'arrowRain': return { cd, num: `${T.total[r]} damage over ${T.dur}s`, short: `${T.total[r]}` };
+    case 'smokeBomb': return { cd, num: `+${Math.round(T.bonus[r] * 100)}% damage in the smoke`, short: `+${Math.round(T.bonus[r] * 100)}%` };
+    case 'elemStorm': return { cd, num: `+${Math.round(T.bonus[r] * 100)}% imbuement strength`, short: `+${Math.round(T.bonus[r] * 100)}%` };
+    case 'windStep': return { cd, num: `−95% dash cooldown for ${T.durs[r]}s`, short: `${T.durs[r]}s` };
     case 'meditate': return { cd, num: r === 3 ? 'Full energy' : `+${T.energy[r]} energy`, short: r === 3 ? 'full' : `+${T.energy[r]}` };
-    case 'vitalize': return { cd, num: r === 3 ? 'Full health' : `+${T.heal[r]} health`, short: r === 3 ? 'full' : `+${T.heal[r]}` };
+    case 'vitalize': return { cd, num: `+${T.heal[r]} health`, short: `+${T.heal[r]}` };
     case 'shadows': return { cd, num: `${T.count[r]} shadows`, short: `${T.count[r]}` };
-    case 'rage': return { cd, num: `${T.mult[r]}× damage`, short: `${T.mult[r]}×` };
+    case 'wisdom': return { cd, num: `−${Math.round(T.cut[r] * 100)}% cooldowns and energy cost`, short: `−${Math.round(T.cut[r] * 100)}%` };
+    case 'rage': return { cd, num: `${T.mult[r]}× dmg, −${Math.round(T.atkCd[r] * 100)}% attack cooldown`, short: `${T.mult[r]}×` };
   }
   return { cd, num: '', short: '' };
+}
+
+// a talent's numbers at rarity r for player p, as rows for its card: { label, v (number), fmt, vary }
+// vary = the number grows with the player's stats (drawn white on the card); icon = the core stat it gives (its icon leads the row)
+export function talentRows(key, r, p) {
+  const T = TALENTS[key], cd = baseCd(T, r), dm = p ? p.stats.baseDamage * (p.dmgMul || 1) : 1;
+  const rows = [];
+  switch (key) {
+    case 'arrowRain': rows.push({ label: 'Damage', v: Math.round(T.total[r] * dm), fmt: (v) => `${v}`, suffix: ` over ${T.dur}s`, vary: true }); break; // (only the damage is white: the seconds don't change)
+    case 'smokeBomb': rows.push({ label: 'Damage in smoke', icon: 'baseDamage', v: T.bonus[r], fmt: (v) => `+${Math.round(v * 100)}%` }); break;
+    case 'elemStorm': rows.push({ label: 'Imbuements', v: T.bonus[r], fmt: (v) => `+${Math.round(v * 100)}%` }); break;
+    case 'windStep': rows.push({ label: 'Dash cooldown', icon: 'dashCd', v: T.cut, fmt: (v) => `−${Math.round(v * 100)}%` }); rows.push({ label: 'Duration', v: T.durs[r], fmt: (v) => `${v}s` }); break;
+    case 'meditate': rows.push({ label: 'Energy', icon: 'energyRegen', v: T.energy[r], fmt: (v) => (v >= 999 ? 'Full' : `+${v}`) }); break;
+    case 'vitalize': rows.push({ label: 'Health', icon: 'healthRegen', v: T.heal[r], fmt: (v) => `+${v}` }); break;
+    case 'shadows': rows.push({ label: 'Shadows', v: T.count[r], fmt: (v) => `${v}` }); rows.push({ label: 'Damage per hit', v: p && p.weapons ? +(shadowHit(p) * dm).toFixed(1) : 0, fmt: (v) => `${v}`, vary: true }); break;
+    case 'wisdom': rows.push({ label: 'Atk cooldowns', icon: 'cooldownMul', v: T.cut[r], fmt: (v) => `−${Math.round(v * 100)}%` }); rows.push({ label: 'Energy cost', icon: 'kiCost', v: T.cut[r], fmt: (v) => `−${Math.round(v * 100)}%` }); break;
+    case 'rage': rows.push({ label: 'Damage', icon: 'baseDamage', v: T.mult[r], fmt: (v) => `${v}×` }); rows.push({ label: 'Atk cooldowns', icon: 'cooldownMul', v: T.atkCd[r], fmt: (v) => `−${Math.round(v * 100)}%` }); break;
+  }
+  rows.push({ label: 'Cooldown', v: cd, fmt: (v) => `${v}s`, lower: true });
+  return rows;
 }
 
 // a new talent; replace = the key of an owned talent it takes the place of (when all slots are full)
@@ -68,12 +96,27 @@ export function activateTalent(g, p, t, tx, ty) {
   const partner = g.players.find((o) => o !== p && o.active);
   switch (t.key) {
     case 'arrowRain':
-      g.hazards.push({ kind: 'arrows', x: tx, y: ty, r: T.radius, t: T.dur, dur: T.dur, tick: 0, dmg: T.dmg[r], from: p });
+      g.hazards.push({ kind: 'arrows', x: tx, y: ty, r: T.radius, t: T.dur, dur: T.dur, tick: T.tick, every: T.tick, dmg: T.total[r] / Math.round(T.dur / T.tick), from: p });
       sfx.throwKnife(); sfx.shoot();
       break;
-    case 'meteor':
-      g.hazards.push({ kind: 'meteor', x: tx, y: ty, r: T.radius, t: T.delay, delay: T.delay, dmg: T.dmg[r], from: p });
-      sfx.bossRoar();
+    case 'smokeBomb':
+      g.hazards.push({ kind: 'smoke', x: p.x, y: p.y, r: T.radius, t: T.dur, dur: T.dur, bonus: T.bonus[r], from: p });
+      g.particles.burst('smoke', p.x, p.y, 0.3, 26, 3, 1.2, 9, 'rgba(120,120,130,1)');
+      g.fx.ring(p.x, p.y, T.radius, 'rgba(200,200,210,0.8)', 0.4, 4);
+      for (const e of g.enemies) if (e._target === p) e._target = null; // they lose you at once
+      sfx.dash();
+      break;
+    case 'elemStorm':
+      p.elemStormT = T.dur; p.elemStormBonus = T.bonus[r];
+      g.fx.ring(p.x, p.y, 2.2, 'rgba(200,170,255,0.9)', 0.5, 5);
+      for (const c of ['#ffe46a', '#7be36a', '#9ee4ff', '#ff8a3c']) g.particles.burst('glow', p.x, p.y, 0.8, 7, 3, 0.8, 2.4, c);
+      sfx.zap();
+      break;
+    case 'windStep':
+      p.windT = T.durs[r];
+      g.fx.ring(p.x, p.y, 1.8, 'rgba(220,255,240,0.9)', 0.4, 4);
+      g.particles.burst('dust', p.x, p.y, 0.1, 14, 4, 0.5, 4, '#e8f4ee', { under: true });
+      sfx.dash();
       break;
     case 'meditate': {
       { const before = p.energy; p.energy = Math.min(p.maxEnergy, p.energy + T.energy[r]); if (r < 3) g.fx.text(p.x, p.y, `+${Math.round(p.energy - before)} energy`, '#9ee8ff', 16); }
@@ -96,10 +139,16 @@ export function activateTalent(g, p, t, tx, ty) {
       for (let i = 0; i < T.count[r]; i++) {
         const a = (i / T.count[r]) * TAU;
         const x = clamp(p.x + Math.cos(a) * 1.4, 1, g.world.N - 1), y = clamp(p.y + Math.sin(a) * 1.4, 1, g.world.N - 1);
-        g.allies.push(new ShadowClone(g, p, x, y, T.dur, T.dmg, T.interval, i));
+        g.allies.push(new ShadowClone(g, p, x, y, T.dur, shadowHit(p), T.interval, i));
         g.particles.burst('ink', x, y, 0.6, 10, 2.5, 0.5, 4, '#2a1a40');
       }
       sfx.spawn();
+      break;
+    case 'wisdom':
+      p.wisdomT = T.dur; p.wisdomCut = T.cut[r];
+      g.fx.ring(p.x, p.y, 2.2, 'rgba(170,220,255,0.9)', 0.5, 5);
+      g.particles.burst('glow', p.x, p.y, 0.8, 24, 2.5, 0.9, 2.4, '#bfe6ff');
+      sfx.chime(1.2);
       break;
     case 'rage':
       p.rageT = T.dur; p.rageMul = T.mult[r];

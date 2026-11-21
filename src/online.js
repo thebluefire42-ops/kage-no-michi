@@ -7,7 +7,9 @@ import { Enemy } from './enemies.js';
 import { BOSSES, ENEMIES } from './config.js';
 import { rollUpgrades, applyUpgrade } from './cards.js';
 import { ShadowClone } from './talents.js';
+import { SpiritAlly } from './spirits.js';
 import { Monk } from './sacrifice.js';
+import { addStrike } from './corruption.js';
 
 const SNAP_INTERVAL = 0.05;   // 20 snapshots / s
 const INPUT_INTERVAL = 1 / 30; // 30 input packets / s
@@ -48,6 +50,9 @@ function encEnemy(e) {
     e.hidden ? 1 : 0, e.dead ? 1 : 0, round(e.stun), round(e.moveAmt), round(e.slowT), e.poison ? 1 : 0, e.phase,
     encTele(e.tele), e.data && e.data.hand ? e.data.hand : 0, e.introVis ? JSON.stringify(e.introVis) : 0, e.emerge ? 1 : 0, e.shield ? (e.shield.up ? 1 : 2) : 0,
     e.kneel ? 1 : 0, e.guarded ? 1 : 0, e.next || 0, e.shield && e.shield.up ? round(e.shieldProgress()) : 0,
+    round(e.shockT || 0), round(e.vulnT || 0), e.daggers ? e.daggers.length : 0,
+    e.tether ? round(e.tether.t) : 0, e.tether && e.tether.p ? e.tether.p.index : 0,
+    round(e.rockT || 0), round(e.rockMax || 0),
   ];
 }
 
@@ -58,7 +63,8 @@ function encProj(q) {
 }
 
 function encHazard(h) {
-  if (h.kind === 'ring') return { k: 'ring', x: round(h.x), y: round(h.y), rad: round(h.rad), speed: h.speed, max: h.max, width: h.width, gap: h.gap ?? null, gapW: h.gapW || 0, fire: h.fire ? 1 : 0 };
+  if (h.kind === 'ring') return { k: 'ring', x: round(h.x), y: round(h.y), rad: round(h.rad), speed: h.speed, max: h.max, min: h.min ?? 0.3, warn: round(h.warn || 0), width: h.width, gap: h.gap ?? null, gapW: h.gapW || 0, fire: h.fire ? 1 : 0 };
+  if (h.kind === 'trap') return { k: 'trap', x: round(h.x), y: round(h.y), s: h.snapT != null ? 1 : 0, a: h.arm > 0 ? 1 : 0 };
   if (h.kind === 'fire') return { k: 'fire', x: round(h.x), y: round(h.y), r: h.r, life: round(h.life) };
   if (h.kind === 'arrows' || h.kind === 'meteor') return { k: h.kind, x: round(h.x), y: round(h.y), r: h.r, t: round(h.t), delay: h.delay || 0 };
   if (h.kind === 'seal') return { k: 'seal', x: round(h.x), y: round(h.y), r: h.r, t: round(h.t), dur: h.dur };
@@ -67,7 +73,8 @@ function encHazard(h) {
   return { k: 'marker', x: round(h.x), y: round(h.y), r: h.r, t: round(h.t), dur: h.dur };
 }
 function decHazard(o) {
-  if (o.k === 'ring') return { kind: 'ring', x: o.x, y: o.y, rad: o.rad, speed: o.speed, max: o.max, width: o.width, gap: o.gap, gapW: o.gapW, fire: !!o.fire };
+  if (o.k === 'ring') return { kind: 'ring', x: o.x, y: o.y, rad: o.rad, speed: o.speed, max: o.max, min: o.min, warn: o.warn, width: o.width, gap: o.gap, gapW: o.gapW, fire: !!o.fire };
+  if (o.k === 'trap') return { kind: 'trap', x: o.x, y: o.y, snapT: o.s ? 0.1 : null, arm: o.a ? 1 : 0, puppet: true };
   if (o.k === 'fire') return { kind: 'fire', x: o.x, y: o.y, r: o.r, life: o.life, tick: 0 };
   if (o.k === 'arrows' || o.k === 'meteor') return { kind: o.k, x: o.x, y: o.y, r: o.r, t: o.t, delay: o.delay, puppet: true };
   if (o.k === 'seal') return { kind: 'seal', x: o.x, y: o.y, r: o.r, t: o.t, dur: o.dur, puppet: true };
@@ -87,7 +94,9 @@ export class OnlineHost {
     net.on('atk', (m) => { const p = this.remote(); if (p && p.active) p.forceAttack(m.slot, m.special, m.ax, m.ay, m.ch, m.cb); });
     net.on('tal', (m) => { const p = this.remote(); if (p && p.active) p.forceTalent(m.i, m.tx, m.ty); });
     net.on('pick', (m) => g.onRemotePick(m.index, m.replace));
+    net.off('reroll'); net.on('reroll', () => g.onRemoteReroll());
     net.on('sacpick', (m) => g.onRemoteSacPick(m.key));
+    net.off('chosen'); net.on('chosen', (m) => g.onRemoteChosen(m));
     net.on('dlgnext', () => g.onRemoteNext());
     net.off('lobby'); net.on('lobby', () => g.toLobby(false)); // the joiner left the end screen: go back together
     net.off('pause'); net.on('pause', (m) => { if (!m.on || g.state === 'play') g.setPaused(!!m.on, true); }); // the joiner paused / resumed
@@ -98,6 +107,7 @@ export class OnlineHost {
       g.banner({ title: 'Player 2 disconnected', sub: net.key ? `They can rejoin with key ${net.key}` : 'You continue alone', dur: 4, y: 0.25, size: 26, color: 'rgba(60,4,10,0.8)' });
       if (g.pendingPicks) { g.pendingPicks.delete(1); g.checkPicksDone(); }
       if (g.sacPending) { g.sacPending.delete(1); g.checkSacDone(); }
+      if (g.chooseWait) { const W = g.chooseWait; g.chooseWait = null; W.cb(null); } // they left mid-choice
     });
   }
 
@@ -129,12 +139,12 @@ export class OnlineHost {
     if (p.dcAlive) { p.dead = false; p.iframes = 2; } // they were alive when they left
     p.dcAlive = false;
     net.send('rejoin', {
-      sets: g.players.map((q) => q.weapons.map((w) => w.key)), level: g.level, seed: g.levelSeed, info: g.levelInfo,
+      sets: g.players.map((q) => q.weapons.map((w) => w.key)), equips: g.players.map((q) => q.equip), level: g.level, seed: g.levelSeed, info: g.levelInfo,
       route: g.route, runStart: g.runStart, picked: p.picked || [], rs: g.runStats,
     });
     if (g.state === 'route' && g.routeScreen.active && g.routeScreen.onSel) g.routeScreen.onSel(); // (the map, if we're on it)
     g.banner({ title: 'Player 2 rejoined', dur: 2.4, y: 0.25, size: 26 });
-    sfx.select();
+    sfx.take();
   }
 
   levelLoaded(n, seed, info) { this.hook(); net.send('level', { n, seed, info }); }
@@ -158,9 +168,13 @@ export class OnlineHost {
         sac: remote.sac, mh: remote.maxHpMul, rl: remote.returnLevel || 0, ru: remote.rushT > 0 ? [round(remote.rushT), round(remote.rushMul)] : 0,
         ar: remote.weapons.map((w) => w.arts || {}),
         dn: remote.downed ? [round(remote.downT), round(remote.reviveP)] : 0, rg: round(remote.rageT), gs: remote.guard ? round(remote.guard.store) : -1,
+        lf: round(remote.lfStacks || 0),
       } : null,
       al: g.allies.map((a) => [a.id, round(a.x), round(a.y), round(a.faceX), round(a.faceY), round(a.anim), round(a.t), a.owner.index]),
+      sp: g.spirits.map((s) => [s.id, s.owner.index, s.type, round(s.x), round(s.y), round(s.faceX), round(s.faceY), Math.max(0, Math.round(s.hp)), s.hpMax, round(s.anim), s.dead ? 1 : 0, round(s.alpha), round(s.flash), s.ranged ? 1 : 0]),
+      wo: g.players.map((p) => (p.wardA == null ? -1 : round(p.wardA))), fl: (g.fallen || []).length,
       wp: round(g.warpT),
+      cm: g.players.map((p) => (p.cbMarks ? [...p.cbMarks].filter(([e]) => !e.dead).map(([e, n]) => [e.id, n]) : [])),
       pk: g.pickups.map((k) => [k.kind, round(k.x), round(k.y), round(k.z), round(k.id)]),
       mk: g.monk ? [round(g.monk.x), round(g.monk.y), round(g.monk.faceX), round(g.monk.faceY), round(g.monk.alpha), round(g.monk.moveAmt), round(g.monk.walk), round(g.monk.bow)] : 0,
       en: g.enemies.map(encEnemy),
@@ -181,11 +195,15 @@ export class OnlineHost {
 export class OnlineClient {
   constructor(g) {
     this.g = g; this.inT = 0; this.lastSnap = null;
-    net.off('snap'); net.off('level'); net.off('cards'); net.off('sac'); net.off('route'); net.off('state'); net.off('phurt'); net.off('pchill'); net.off('pstun'); net.off('disconnect');
+    net.off('snap'); net.off('level'); net.off('cards'); net.off('sac'); net.off('route'); net.off('state'); net.off('phurt'); net.off('pchill'); net.off('pstun'); net.off('pdashcut'); net.off('disconnect');
     net.on('snap', (m) => this.applySnap(m.s, m.ev));
     net.on('level', (m) => g.loadLevel(m.n, m.seed, m.info || null));
+    net.on('cstrike', (m) => addStrike(g, m.x, m.y, m.d || 0));
+    net.on('creveal', (m) => { if (g.state === 'route') g.routeScreen.startReveal(m.kind, m.i, null); }); // a storm's lightning (the host deals the damage)
     net.on('cards', (m) => g.openClientCards(m.cards));
     net.on('sac', (m) => g.openClientSac(m.cards));
+    net.off('choose'); net.on('choose', (m) => g.openClientChoose(m));
+    net.off('picked'); net.on('picked', (m) => { const me = g.localPlayer(); if (me) me.picked = m.list || []; });
     net.on('route', (m) => g.onRemoteRoute(m));
     net.on('cut', (m) => g.onRemoteCutscene(m));
     net.on('dlg', (m) => g.onRemoteDialogue(m));
@@ -193,6 +211,7 @@ export class OnlineClient {
     net.on('phurt', (m) => g.localPlayer().remoteHurt(m));
     net.on('pchill', (m) => g.localPlayer().applyChill(m.a, m.d, true));
     net.on('pstun', (m) => g.localPlayer().applyStun(m.d, true));
+    net.on('pdashcut', (m) => { const p = g.localPlayer(); if (p) p.dash.cd *= 1 - (m.k || 0); sfx.kunaiPull(); }); // pulled our kunai out on the host
     net.off('lobby'); net.on('lobby', () => g.toLobby(false)); // the host left the end screen: go back together
     net.on('disconnect', () => {
       const ended = g.state === 'dead' || g.state === 'victory'; // the run was over anyway
@@ -235,6 +254,7 @@ export class OnlineClient {
     g.pickups = (s.pk || []).map(([kind, x, y, z, id]) => ({ kind, x, y, z, id }));
     applyDowned(g.players[0], s.p0);
     g.warpT = s.wp || 0;
+    (s.cm || []).forEach((m, i) => { if (g.players[i]) g.players[i].netMarks = Array.isArray(m) ? m.filter(Array.isArray).map(([id, n]) => ({ id, n })) : []; });
     // the host's shadow clones (drawn as puppets)
     const allies = new Map(g.allies.map((a) => [a.id, a]));
     g.allies = (s.al || []).map(([id, x, y, fx, fy, an, t, owner]) => {
@@ -243,6 +263,19 @@ export class OnlineClient {
       a.tx = x; a.ty = y; a.faceX = fx; a.faceY = fy; a.anim = an; a.t = t; a.moveAmt = Math.hypot(x - a.x, y - a.y) > 0.02 ? 1 : 0;
       return a;
     });
+    // the spirit orb's spirits (puppets that follow the host's positions), the Wandering Souls orbs, souls to call back
+    const spirits = new Map(g.spirits.map((s) => [s.id, s]));
+    g.spirits = (s.sp || []).map(([id, owner, type, x, y, fx, fy, hp, hpMax, an, dead, al, fl, rg]) => {
+      let o = spirits.get(id);
+      if (!o) { o = new SpiritAlly(g, g.players[owner] || g.players[0], { type, hp: hpMax, dmg: 0, r: (ENEMIES[type] && ENEMIES[type].r) || 0.32, speed: 3, range: 1.2, cooldown: 1, ranged: !!rg }, x, y); o.id = id; o.net = true; }
+      o.tx = x; o.ty = y; o.faceX = fx; o.faceY = fy; o.hp = hp; o.hpMax = hpMax; o.alpha = al; o.flash = fl;
+      if (an > o.anim + 0.05) o.anim = an;
+      if (dead && !o.dead) { o.dead = true; o.deathT = 0; }
+      return o;
+    });
+    for (const o of spirits.values()) if (!g.spirits.includes(o) && o.dead && o.deathT < 0.8) g.spirits.push(o); // let a fading one finish
+    (s.wo || []).forEach((a, i) => { if (g.players[i]) g.players[i].wardA = a < 0 ? null : a; });
+    g.netFallen = s.fl || 0;
     // my authoritative stats
     const me = g.localPlayer();
     if (s.me && me) {
@@ -260,6 +293,7 @@ export class OnlineClient {
       applyDowned(me, s.me);
       me.sac = s.me.sac || []; me.maxHpMul = s.me.mh || 1; me.returnLevel = s.me.rl || 0;
       if (me.guard && s.me.gs >= 0) me.guard.store = s.me.gs; // the host's store is the real one
+      if (s.me.lf !== undefined) { if (s.me.lf > (me.lfStacks || 0)) me.lfT = 0; me.lfStacks = s.me.lf; } // light feet (hits happen on the host)
     }
     { const A = g.world.library || g.world.shrine; if (A && s.lib !== undefined) { A.ready = s.lib === 1; A.taken = s.lib === 2; } }
     // the wandering monk (drawn only)
@@ -284,7 +318,7 @@ export class OnlineClient {
       e.pose = a[10] ? { kind: a[10], t: a[11] } : null;
       e.hp = a[12]; e.hpMax = a[13]; e.flash = a[14]; e.alpha = a[15]; e.hidden = !!a[16];
       if (a[17] && !e.dead) { e.dead = true; e.deathT = 0; }
-      e.stun = a[18]; e.moveAmt = a[19]; e.slowT = a[20]; e.poison = a[21] ? { dps: 0 } : null; e.phase = a[22];
+      e.stun = a[18]; e.moveAmt = a[19]; e.slowT = a[20]; e.poison = a[21] ? { net: true } : null; // (the joiner only shows it; the host deals it) e.phase = a[22];
       e.tele = a[23] ? JSON.parse(a[23]) : null;
       e.data.hand = a[24];
       e.introVis = a[25] ? JSON.parse(a[25]) : null;
@@ -292,6 +326,9 @@ export class OnlineClient {
       if (e.shield) e.shield.up = a[27] === 1;
       e.kneel = !!a[28]; e.guarded = !!a[29]; e.next = a[30] || null;
       if (e.shield) e.shield.netProg = a[31] || 0;
+      e.shockT = a[32] || 0; e.vulnT = a[33] || 0; e.netDg = a[34] || 0;
+      e.tether = a[35] ? { t: a[35], p: g.players[a[36]] || g.players[0] } : null; // spirit orb tether (drawn only)
+      e.rockT = a[37] || 0; e.rockMax = a[38] || 5; // locked in the gloves' rock (drawn only)
       if (e.state === 'spawn' && e.alpha < 0.05) { e.x = e.tx; e.y = e.ty; }
     }
     g.enemies = g.enemies.filter((e) => seen.has(e.id) || (e.dead && e.deathT < 1));
@@ -360,7 +397,7 @@ export function smoothPuppets(g, dt) {
   }
   for (const h of g.hazards) {
     if (h.kind === 'arrows' || h.kind === 'meteor') h.t = Math.max(0, h.t - dt);
-    else if (h.kind === 'ring') h.rad = Math.min(h.max, h.rad + h.speed * dt);
+    else if (h.kind === 'ring') { if (h.warn > 0) h.warn -= dt; else h.rad = Math.max(h.min ?? 0, Math.min(h.max, h.rad + h.speed * dt)); }
     else if (h.kind === 'marker') h.t = Math.max(0, h.t - dt);
     else if (h.kind === 'fire') { h.life -= dt; if (Math.random() < 0.6) g.particles.emit('ember', h.x + rand(-h.r, h.r) * 0.7, h.y + rand(-h.r, h.r) * 0.7, 0.1, 0, 0, rand(1, 2.5), 0.6, 2, Math.random() < 0.5 ? '#ff6a20' : '#ffb040'); }
   }
